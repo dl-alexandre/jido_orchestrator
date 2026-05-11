@@ -1,0 +1,34 @@
+# The directory Mix will write compiled artifacts to.
+/_build/
+
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+
+# Where third-party dependencies like ExDoc output generated docs.
+/doc/
+
+# Temporary files, for example, from tests.
+/tmp/
+
+# Test support artifacts for stale beam cleaner.
+/.test.corrupt-stale-beams/
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via `mix archive.build`).
+*.ez
+
+# Ignore package tarballs (built via `mix hex.build`).
+jido_ide-*.tar
+jx-*.tar
+
+# Escript binary built by `mix escript.build`.
+/agent
+/jx
+
+# Rust build artifacts
+/crates/*/target/

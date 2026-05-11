@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+USE_ESCRIPT="${JX_USE_ESCRIPT:-0}"
+
+if [ "$USE_ESCRIPT" = "1" ] && [ -x "$ROOT/jx" ]; then
+  exec "$ROOT/jx" "$@"
+fi
+
+MIX_ENV="${MIX_ENV:-dev}"
+CLI_BEAM="$ROOT/_build/$MIX_ENV/lib/jx/ebin/Elixir.JX.CLI.beam"
+AUTO_COMPILE="${JX_AUTO_COMPILE:-0}"
+
+if [ "$AUTO_COMPILE" = "1" ] || [ ! -f "$CLI_BEAM" ]; then
+  mix compile --quiet >/dev/null
+fi
+
+exec mix run --no-compile --no-start -e 'JX.CLI.main(System.argv())' -- "$@"

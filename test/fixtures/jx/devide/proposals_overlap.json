@@ -1,0 +1,8 @@
+[
+  {
+    "path": "p.diff",
+    "risk": "overlap",
+    "files_count": 1,
+    "overlapping_files": ["lib/a.ex"]
+  }
+]

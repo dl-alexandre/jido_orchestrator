@@ -1,0 +1,9 @@
+[
+  {
+    "action": "policy.blocked",
+    "target_type": "proposal",
+    "target_ref": "fix.diff",
+    "reason": "needs_review",
+    "inserted_at": "2026-05-08T10:00:00Z"
+  }
+]

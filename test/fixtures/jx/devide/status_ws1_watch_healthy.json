@@ -1,0 +1,32 @@
+{
+  "workspace": {
+    "id": "ws-1",
+    "name": "alpha",
+    "status": "running"
+  },
+  "mode": {
+    "value": "review",
+    "source": "default"
+  },
+  "db_isolation": {
+    "isolation": "local",
+    "source": "env_file"
+  },
+  "active_run": null,
+  "recent_runs": [
+    {
+      "id": "run-test",
+      "command_id": "test",
+      "status": "succeeded",
+      "exit_code": "0"
+    },
+    {
+      "id": "run-compile",
+      "command_id": "compile",
+      "status": "succeeded",
+      "exit_code": "0"
+    }
+  ],
+  "recent_proposals": [],
+  "recent_audit": []
+}

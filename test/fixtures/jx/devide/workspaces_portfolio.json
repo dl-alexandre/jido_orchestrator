@@ -1,0 +1,17 @@
+[
+  {
+    "id": "healthy",
+    "name": "Healthy",
+    "status": "running"
+  },
+  {
+    "id": "blocked",
+    "name": "Blocked",
+    "status": "running"
+  },
+  {
+    "id": "review",
+    "name": "Review",
+    "status": "running"
+  }
+]

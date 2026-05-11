@@ -1,0 +1,24 @@
+{
+  "workspace": {
+    "id": "ws-1",
+    "name": "alpha",
+    "status": "running"
+  },
+  "mode": {
+    "value": "review",
+    "source": "default"
+  },
+  "db_isolation": {
+    "isolation": "local",
+    "source": "env_file",
+    "redacted_summary": "super-secret"
+  },
+  "active_run": {
+    "command_id": "test",
+    "argv": ["mix", "test", "--token", "super-secret"],
+    "status": "failed"
+  },
+  "recent_runs": [],
+  "recent_proposals": [],
+  "recent_audit": []
+}

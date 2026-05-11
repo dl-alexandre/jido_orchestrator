@@ -1,0 +1,9 @@
+[
+  {
+    "action": "policy.blocked",
+    "target_type": "proposal",
+    "target_ref": "fix.diff",
+    "reason": "unsafe_db",
+    "inserted_at": "2026-05-08T10:00:00Z"
+  }
+]

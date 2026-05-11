@@ -1,0 +1,43 @@
+{
+  "workspace": {
+    "id": "ws-1",
+    "name": "alpha",
+    "status": "running"
+  },
+  "mode": {
+    "value": "review",
+    "source": "default"
+  },
+  "db_isolation": {
+    "isolation": "unsafe",
+    "source": "env_file"
+  },
+  "active_run": {
+    "command_id": "test",
+    "status": "failed",
+    "exit_code": "1"
+  },
+  "recent_runs": [
+    {
+      "id": "run-test",
+      "command_id": "test",
+      "status": "succeeded",
+      "exit_code": "0"
+    },
+    {
+      "id": "run-compile",
+      "command_id": "compile",
+      "status": "succeeded",
+      "exit_code": "0"
+    }
+  ],
+  "recent_proposals": [
+    {
+      "path": ".opencode/proposals/fix.diff",
+      "risk": "conflict",
+      "files_count": 1,
+      "overlapping_files": ["lib/a.ex"]
+    }
+  ],
+  "recent_audit": []
+}

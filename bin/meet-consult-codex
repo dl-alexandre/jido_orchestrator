@@ -1,0 +1,64 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+CODEX_BIN="${CODEX_BIN:-codex}"
+MODEL="${JX_MEET_CODEX_MODEL:-}"
+TMP_PAYLOAD="${TMPDIR:-/tmp}/jx-meet-consult-payload-$$.json"
+TMP_PROMPT="${TMPDIR:-/tmp}/jx-meet-consult-prompt-$$.txt"
+
+trap 'rm -f "$TMP_PAYLOAD" "$TMP_PROMPT"' EXIT HUP INT TERM
+
+cat >"$TMP_PAYLOAD"
+
+python3 - "$TMP_PAYLOAD" >"$TMP_PROMPT" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8") or "{}")
+session = payload.get("session", {})
+transcript = (payload.get("transcript") or "").strip()
+
+meeting = session.get("meeting_uri") or session.get("meeting_code") or "Google Meet"
+project = session.get("project") or ""
+ref = session.get("ref") or ""
+
+print("You are the jx Meet participant.")
+print("Respond briefly as a live collaborator in the meeting.")
+print("Return JSON only with keys: response, summary, decisions, follow_ups.")
+print()
+print(f"Meeting: {meeting}")
+if project:
+    print(f"Project: {project}")
+if ref:
+    print(f"Ref: {ref}")
+print()
+print("Latest transcript:")
+print(transcript)
+PY
+
+if ! command -v "$CODEX_BIN" >/dev/null 2>&1; then
+  python3 - "$TMP_PAYLOAD" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8") or "{}")
+transcript = (payload.get("transcript") or "").strip()
+summary = transcript[:220] if transcript else "Meet turn captured."
+print(json.dumps({
+    "response": "I am connected through the Meet bridge and tracking this.",
+    "summary": summary,
+    "decisions": [],
+    "follow_ups": []
+}))
+PY
+  exit 0
+fi
+
+if [ -n "$MODEL" ]; then
+  exec "$CODEX_BIN" exec --model "$MODEL" - <"$TMP_PROMPT"
+fi
+
+exec "$CODEX_BIN" exec - <"$TMP_PROMPT"

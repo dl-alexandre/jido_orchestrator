@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+# If a real browser agent is configured, pass the jx realtime payload
+# through unchanged. The agent should return caption/chat JSON on stdout.
+if [ -n "${JX_MEET_BROWSER_AGENT_CMD:-}" ]; then
+  exec sh -lc "$JX_MEET_BROWSER_AGENT_CMD"
+fi
+
+CAPTION_FILE="${JX_MEET_CAPTION_FILE:-$ROOT/tmp/meet-captions.json}"
+CHAT_FILE="${JX_MEET_CHAT_INPUT:-$ROOT/tmp/meet-chat-input.txt}"
+
+if [ -f "$CAPTION_FILE" ]; then
+  cat "$CAPTION_FILE"
+  exit 0
+fi
+
+if [ -f "$CHAT_FILE" ]; then
+  python3 - "$CHAT_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+print(json.dumps({"status": "ok", "transcript": text}))
+PY
+  exit 0
+fi
+
+printf '%s\n' '{"status":"idle","transcript":"","captions":[]}'

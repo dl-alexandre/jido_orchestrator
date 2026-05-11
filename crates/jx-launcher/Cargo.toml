@@ -1,0 +1,9 @@
+[package]
+name = "jx-launcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tar = "0.4"
+flate2 = "1.0"
+dirs = "5.0"

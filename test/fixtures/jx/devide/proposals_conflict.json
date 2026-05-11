@@ -1,0 +1,8 @@
+[
+  {
+    "path": ".opencode/proposals/fix.diff",
+    "risk": "conflict",
+    "files_count": 2,
+    "overlapping_files": ["lib/example.ex"]
+  }
+]

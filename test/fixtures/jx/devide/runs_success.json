@@ -1,0 +1,14 @@
+[
+  {
+    "id": "run-test",
+    "command_id": "test",
+    "status": "succeeded",
+    "exit_code": "0"
+  },
+  {
+    "id": "run-compile",
+    "command_id": "compile",
+    "status": "succeeded",
+    "exit_code": "0"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "workspace": {
+    "id": "healthy",
+    "name": "Healthy",
+    "status": "running"
+  },
+  "mode": {
+    "value": "review",
+    "source": "default"
+  },
+  "db_isolation": {
+    "isolation": "local",
+    "source": "env_file"
+  },
+  "active_run": null,
+  "recent_runs": [],
+  "recent_proposals": [],
+  "recent_audit": []
+}
