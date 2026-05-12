@@ -6,8 +6,8 @@ defmodule JX.CLI do
   alias JX.AgentRunner
   alias JX.CiDigest
   alias JX.CLI.DevIDE, as: DevIDECLI
+  alias JX.CLI.Host, as: HostCLI
   alias JX.Fanout
-  alias JX.HostDoctor
   alias JX.Migrations
   alias JX.MonitorEvents
   alias JX.NextStep
@@ -60,91 +60,9 @@ defmodule JX.CLI do
 
   defp dispatch(["devide" | _rest] = args), do: dispatch_devide(args)
 
-  defp dispatch(["host", "add", name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [ssh: :string, workspace: :string, local: :boolean])
+  defp dispatch(["host" | args]), do: HostCLI.run(args, start_app: &start_app/0)
 
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, host_add_usage()),
-         {:ok, attrs} <- host_attrs(name, opts),
-         :ok <- start_app(),
-         {:ok, host} <- Workspace.add_host(attrs) do
-      IO.puts(host_registered_text(host))
-      :ok
-    end
-  end
-
-  defp dispatch(["host", "doctor", name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [agent: :string, transport: :string])
-
-    agent_name = opts[:agent]
-    agent_transport = opts[:transport] || AgentRunner.default_agent_transport()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx host doctor <host> [--agent claude|opencode|codex] [--transport native|acpx]"
-           ),
-         :ok <- validate_optional_agent_name(agent_name),
-         :ok <- validate_agent_transport(agent_transport),
-         {:ok, report} <- Workspace.doctor_host(name, doctor_opts(agent_name, agent_transport)) do
-      print_doctor_report(report)
-
-      if HostDoctor.passed?(report) do
-        :ok
-      else
-        {:error, "doctor checks failed"}
-      end
-    end
-  end
-
-  defp dispatch(["host", "ls"]) do
-    with :ok <- start_app() do
-      Workspace.list_hosts()
-      |> print_hosts()
-
-      :ok
-    end
-  end
-
-  defp dispatch(["host", "doctor" | _args]) do
-    {:error,
-     "usage: jx host doctor <host> [--agent claude|opencode|codex] [--transport native|acpx]"}
-  end
-
-  defp dispatch(["host" | _args]) do
-    {:error, "usage: #{host_add_usage()} | jx host doctor <host>"}
-  end
-
-  defp dispatch(["hosts", "doctor" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [agent: :string, transport: :string, json: :boolean])
-
-    agent_name = opts[:agent]
-    agent_transport = opts[:transport] || AgentRunner.default_agent_transport()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, hosts_doctor_usage()),
-         :ok <- validate_optional_agent_name(agent_name),
-         :ok <- validate_agent_transport(agent_transport),
-         {:ok, report} <- Workspace.doctor_hosts(doctor_opts(agent_name, agent_transport)) do
-      print_hosts_doctor_report(report, json: opts[:json] || false)
-
-      if Enum.all?(report.reports, &HostDoctor.passed?/1) do
-        :ok
-      else
-        {:error, "doctor checks failed"}
-      end
-    end
-  end
-
-  defp dispatch(["hosts" | _args]) do
-    {:error, "usage: #{hosts_doctor_usage()}"}
-  end
+  defp dispatch(["hosts" | args]), do: HostCLI.run_plural(args, start_app: &start_app/0)
 
   defp dispatch(["project", "add", name | args]) do
     {opts, rest, invalid} = OptionParser.parse(args, strict: [host: :string, repo: :string])
@@ -5736,41 +5654,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp host_attrs(name, opts) do
-    cond do
-      opts[:local] && opts[:ssh] ->
-        {:error, "use either --local or --ssh, not both"}
-
-      opts[:local] ->
-        {:ok, %{name: name, transport: "local", workspace_path: opts[:workspace]}}
-
-      true ->
-        {:ok,
-         %{
-           name: name,
-           transport: "ssh",
-           ssh_target: opts[:ssh],
-           workspace_path: opts[:workspace]
-         }}
-    end
-  end
-
-  defp host_registered_text(%{transport: "local"} = host) do
-    "host #{host.name} registered: local workspace=#{host.workspace_path}"
-  end
-
-  defp host_registered_text(host) do
-    "host #{host.name} registered: #{host.ssh_target} workspace=#{host.workspace_path}"
-  end
-
-  defp host_add_usage do
-    "jx host add <name> (--ssh <user@host> | --local) --workspace <path>"
-  end
-
-  defp hosts_doctor_usage do
-    "jx hosts doctor [--agent claude|opencode|codex] [--transport native|acpx] [--json]"
-  end
-
   defp task_adopt_tmux_usage do
     "jx task adopt-tmux <project> --session <name> --worktree <path> [--server <server>] [--window 0] [--pane 0] [--agent claude|opencode|codex]"
   end
@@ -6963,56 +6846,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_doctor_report(%{host: host, groups: groups}) do
-    IO.puts("host #{host.name} (#{host.transport})")
-
-    Enum.each(groups, fn group ->
-      IO.puts("")
-      IO.puts(group.name)
-      Enum.each(group.checks, &print_doctor_check/1)
-    end)
-  end
-
-  defp print_doctor_check(check) do
-    IO.puts("  #{doctor_status(check.status)} #{check.name}#{doctor_detail(check.detail)}")
-  end
-
-  defp doctor_status(:ok), do: "OK"
-  defp doctor_status(:fail), do: "FAIL"
-  defp doctor_status(:skip), do: "SKIP"
-
-  defp doctor_detail(nil), do: ""
-  defp doctor_detail(""), do: ""
-  defp doctor_detail(detail), do: " - #{detail}"
-
-  defp print_hosts_doctor_report(report, json: true) do
-    print_json(%{hosts_doctor: normalize_hosts_doctor(report)})
-  end
-
-  defp print_hosts_doctor_report(%{reports: reports}, json: false) do
-    Enum.each(Enum.with_index(reports), fn {report, index} ->
-      if index > 0, do: IO.puts("")
-      print_doctor_report(report)
-    end)
-  end
-
-  defp normalize_hosts_doctor(%{generated_at: generated_at, reports: reports}) do
-    %{
-      generated_at: generated_at,
-      reports:
-        Enum.map(reports, fn %{host: host, groups: groups} ->
-          %{
-            host: host.name,
-            transport: host.transport,
-            ssh_target: host.ssh_target || "",
-            workspace_path: host.workspace_path,
-            passed: HostDoctor.passed?(%{groups: groups}),
-            groups: groups
-          }
-        end)
-    }
-  end
-
   defp print_repo_doctor_report(report, json: true), do: print_json(%{repo_doctor: report})
 
   defp print_repo_doctor_report(report, json: false) do
@@ -7073,6 +6906,14 @@ defmodule JX.CLI do
       end)
     end
   end
+
+  defp doctor_status(:ok), do: "OK"
+  defp doctor_status(:fail), do: "FAIL"
+  defp doctor_status(:skip), do: "SKIP"
+
+  defp doctor_detail(nil), do: ""
+  defp doctor_detail(""), do: ""
+  defp doctor_detail(detail), do: " - #{detail}"
 
   defp print_repo_gate_list(title, []), do: IO.puts("#{title}:\n- none")
 
@@ -8291,18 +8132,6 @@ defmodule JX.CLI do
        "unsupported process kind #{inspect(kind)}; expected one of: #{Enum.join(ProcessInventory.known_kinds(), ", ")}"}
     end
   end
-
-  defp doctor_opts(agent_name, agent_transport) do
-    []
-    |> put_present_kw(:agent_transport, agent_transport)
-    |> put_present_kw(:agents, doctor_agents(agent_name))
-  end
-
-  defp doctor_agents(nil), do: nil
-  defp doctor_agents(agent_name), do: [agent_name]
-
-  defp put_present_kw(attrs, _key, nil), do: attrs
-  defp put_present_kw(attrs, key, value), do: Keyword.put(attrs, key, value)
 
   defp session_profile_attrs(opts) do
     %{}
@@ -12107,22 +11936,6 @@ defmodule JX.CLI do
       ref.prompt_status in ["ready", "draft", "sent", "blocked"]
   end
 
-  defp print_hosts([]), do: IO.puts("no hosts")
-
-  defp print_hosts(hosts) do
-    rows =
-      Enum.map(hosts, fn host ->
-        [
-          host.name,
-          host.transport,
-          host.ssh_target || "",
-          host.workspace_path
-        ]
-      end)
-
-    print_table(["HOST", "TRANSPORT", "SSH", "WORKSPACE"], rows)
-  end
-
   defp print_tmux_sessions([]), do: IO.puts("no sessions")
 
   defp print_tmux_sessions(sessions) do
@@ -15505,12 +15318,8 @@ defmodule JX.CLI do
       "devide" => devide_usage(),
       "events" => [events_usage()],
       "fanout" => [fanout_usage()],
-      "host" => [
-        host_add_usage(),
-        "jx host ls",
-        "jx host doctor <host> [--agent claude|opencode|codex] [--transport native|acpx]"
-      ],
-      "hosts" => [hosts_doctor_usage()],
+      "host" => HostCLI.usage_lines(:host),
+      "hosts" => HostCLI.usage_lines(:hosts),
       "leases" => [
         leases_ls_usage(),
         leases_acquire_usage(),
