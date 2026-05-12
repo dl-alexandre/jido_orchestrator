@@ -21,6 +21,7 @@ defmodule JX.CLI do
   alias JX.CLI.Runtimes, as: RuntimesCLI
   alias JX.CLI.Session, as: SessionCLI
   alias JX.CLI.SSH, as: SSHCLI
+  alias JX.CLI.Timeline, as: TimelineCLI
   alias JX.CLI.Tmux, as: TmuxCLI
   alias JX.Migrations
   alias JX.MonitorEvents
@@ -2957,33 +2958,7 @@ defmodule JX.CLI do
 
   defp dispatch(["leases" | args]), do: LeasesCLI.run(args, start_app: &start_app/0)
 
-  defp dispatch(["timeline", scope, id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [n: :integer, json: :boolean], aliases: [n: :n])
-
-    limit = opts[:n] || 100
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx timeline workspace|approval|action|assignment|agent|runner|session <id> [-n 100] [--json]"
-           ),
-         :ok <- validate_timeline_scope(scope),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      scope
-      |> Workspace.operational_timeline(id, limit: limit)
-      |> print_timeline(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["timeline" | _args]),
-    do:
-      {:error,
-       "usage: jx timeline workspace|approval|action|assignment|agent|runner|session <id> [-n 100] [--json]"}
+  defp dispatch(["timeline" | args]), do: TimelineCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["approvals" | args]), do: ApprovalsCLI.run(args, start_app: &start_app/0)
 
@@ -5963,15 +5938,6 @@ defmodule JX.CLI do
       {:error,
        "unsupported session status #{inspect(status)}; expected created, claimed, running, progressed, completed, failed, stale, expired, ended, active, or all"}
 
-  defp validate_timeline_scope(scope)
-       when scope in ~w(workspace approval action assignment agent runner session),
-       do: :ok
-
-  defp validate_timeline_scope(scope),
-    do:
-      {:error,
-       "unsupported timeline scope #{inspect(scope)}; expected workspace, approval, action, assignment, agent, runner, or session"}
-
   defp parse_positive_integer(value, name) do
     case Integer.parse(to_string(value)) do
       {integer, ""} when integer > 0 -> {:ok, integer}
@@ -6342,90 +6308,6 @@ defmodule JX.CLI do
        do: "jx sessions show #{id}"
 
   defp runner_session_next(%{session_id: id}), do: "jx timeline session #{id}"
-
-  defp print_timeline(timeline, opts) do
-    if opts[:json] do
-      print_json(%{
-        scope: timeline.scope,
-        id: timeline.id,
-        events: Enum.map(timeline.events, &json_operational_event/1),
-        rebuilt: timeline.rebuilt
-      })
-    else
-      IO.puts("timeline #{timeline.scope} #{timeline.id}")
-
-      if timeline.events == [] do
-        IO.puts("events: none")
-      else
-        IO.puts("events")
-
-        Enum.each(timeline.events, fn event ->
-          note = timeline_note(event)
-
-          IO.puts(
-            "  - #{format_time(event.inserted_at)} #{event.kind} corr=#{event.correlation_id} entity=#{event.entity_type}:#{event.entity_id} owner=#{blank_to_dash(event.owner)} #{event.summary}#{note}"
-          )
-        end)
-      end
-    end
-  end
-
-  defp timeline_note(event) do
-    payload = JX.OperationalEvents.decode_payload(event)
-
-    cond do
-      event.kind == "safe_action.execute_denied" ->
-        denial = Map.get(payload, "denial", %{})
-
-        " outcome=#{blank_to_dash(Map.get(denial, "outcome"))} reason=#{blank_to_dash(Map.get(denial, "reason"))} next=jx actions show #{event.action_id}"
-
-      event.kind in ["lease.expired", "lease.reassigned"] ->
-        " next=jx leases ls --resource #{timeline_lease_resource(payload)} --status all"
-
-      event.kind == "approval.acknowledged" ->
-        " next=jx actions history #{event.approval_id}"
-
-      event.kind == "safe_action.executed" ->
-        " next=jx actions show #{event.action_id}"
-
-      event.entity_type not in JX.OperationalEvents.Event.entity_types() ->
-        " note=unknown_entity_type"
-
-      payload == %{} and event.payload not in [nil, "", "{}"] ->
-        " note=payload_unavailable"
-
-      true ->
-        ""
-    end
-  end
-
-  defp timeline_lease_resource(payload) when is_map(payload) do
-    type = Map.get(payload, "resource_type", "approval")
-    id = Map.get(payload, "resource_id", "")
-    "#{type}:#{id}"
-  end
-
-  defp timeline_lease_resource(_payload), do: "approval:<id>"
-
-  defp json_operational_event(event) do
-    %{
-      event_id: event.event_id,
-      correlation_id: event.correlation_id,
-      source: event.source,
-      kind: event.kind,
-      entity_type: event.entity_type,
-      entity_id: event.entity_id,
-      workspace_id: event.workspace_id,
-      approval_id: event.approval_id,
-      action_id: event.action_id,
-      lease_id: event.lease_id,
-      owner: event.owner,
-      severity: event.severity,
-      summary: event.summary,
-      payload: JX.OperationalEvents.decode_payload(event),
-      inserted_at: event.inserted_at
-    }
-  end
 
   defp print_notifications([], opts) do
     if opts[:json] do
