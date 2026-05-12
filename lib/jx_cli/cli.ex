@@ -12,6 +12,7 @@ defmodule JX.CLI do
   alias JX.CLI.DevIDE, as: DevIDECLI
   alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
+  alias JX.CLI.Leases, as: LeasesCLI
   alias JX.CLI.Project, as: ProjectCLI
   alias JX.CLI.Runners, as: RunnersCLI
   alias JX.Migrations
@@ -3413,101 +3414,7 @@ defmodule JX.CLI do
 
   defp dispatch(["runtimes" | _args]), do: {:error, "usage: #{runtimes_usage()}"}
 
-  defp dispatch(["leases", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          owner: :string,
-          status: :string,
-          resource: :string,
-          stale: :boolean,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 50
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, leases_ls_usage()),
-         :ok <- validate_optional_lease_status(opts[:status]),
-         {:ok, resource_type, resource_id} <- lease_resource_filter(opts[:resource]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_leases(
-        owner: opts[:owner],
-        status: opts[:status],
-        resource_type: resource_type,
-        resource_id: resource_id,
-        stale: opts[:stale] || false,
-        limit: limit
-      )
-      |> print_leases(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["leases", "acquire", resource_type, resource_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [owner: :string, ttl_seconds: :integer, reason: :string, json: :boolean]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, leases_acquire_usage()),
-         :ok <- validate_required_option("owner", opts[:owner]),
-         :ok <- validate_optional_positive("ttl-seconds", opts[:ttl_seconds]),
-         :ok <- start_app(),
-         {:ok, lease} <-
-           Workspace.acquire_lease(resource_type, resource_id, opts[:owner],
-             ttl_seconds: opts[:ttl_seconds] || 15 * 60,
-             reason: opts[:reason] || ""
-           ) do
-      print_lease("acquired", lease, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["leases", "release", lease_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [owner: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx leases release <lease-id> --owner <owner> [--json]"),
-         :ok <- validate_required_option("owner", opts[:owner]),
-         :ok <- start_app(),
-         {:ok, lease} <- Workspace.release_lease(lease_id, opts[:owner]) do
-      print_lease("released", lease, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["leases", "reassign", resource_type, resource_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [owner: :string, ttl_seconds: :integer, reason: :string, json: :boolean]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, leases_reassign_usage()),
-         :ok <- validate_required_option("owner", opts[:owner]),
-         :ok <- validate_optional_positive("ttl-seconds", opts[:ttl_seconds]),
-         :ok <- start_app(),
-         {:ok, lease} <-
-           Workspace.reassign_lease(resource_type, resource_id, opts[:owner],
-             ttl_seconds: opts[:ttl_seconds] || 15 * 60,
-             reason: opts[:reason] || ""
-           ) do
-      print_lease("reassigned", lease, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["leases" | _args]),
-    do:
-      {:error,
-       "usage: #{leases_ls_usage()} | #{leases_acquire_usage()} | jx leases release <lease-id> --owner <owner> [--json] | #{leases_reassign_usage()}"}
+  defp dispatch(["leases" | args]), do: LeasesCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["timeline", scope, id | args]) do
     {opts, rest, invalid} =
@@ -7056,17 +6963,6 @@ defmodule JX.CLI do
       {:error,
        "unsupported queue sort #{inspect(sort)}; expected urgency, freshness, owner, or risk"}
 
-  defp validate_optional_lease_status(nil), do: :ok
-
-  defp validate_optional_lease_status(status)
-       when status in ~w(active released expired reassigned all),
-       do: :ok
-
-  defp validate_optional_lease_status(status),
-    do:
-      {:error,
-       "unsupported lease status #{inspect(status)}; expected active, released, expired, reassigned, or all"}
-
   defp validate_timeline_scope(scope)
        when scope in ~w(workspace approval action assignment agent runner session),
        do: :ok
@@ -7075,15 +6971,6 @@ defmodule JX.CLI do
     do:
       {:error,
        "unsupported timeline scope #{inspect(scope)}; expected workspace, approval, action, assignment, agent, runner, or session"}
-
-  defp lease_resource_filter(nil), do: {:ok, nil, nil}
-
-  defp lease_resource_filter(resource) do
-    case String.split(resource, ":", parts: 2) do
-      [type, id] when type in ~w(approval action workspace) and id != "" -> {:ok, type, id}
-      _other -> {:error, "resource must look like approval:<id>, action:<id>, or workspace:<id>"}
-    end
-  end
 
   defp parse_positive_integer(value, name) do
     case Integer.parse(to_string(value)) do
@@ -8072,44 +7959,6 @@ defmodule JX.CLI do
 
   defp runner_session_next(%{session_id: id}), do: "jx timeline session #{id}"
 
-  defp print_leases(leases, opts) do
-    if opts[:json] do
-      print_json(%{leases: Enum.map(leases, &json_lease/1)})
-    else
-      if leases == [] do
-        IO.puts("no leases")
-      else
-        rows =
-          Enum.map(leases, fn lease ->
-            [
-              lease.lease_id,
-              lease.resource_type,
-              lease.resource_id,
-              lease.owner,
-              lease.status,
-              lease.correlation_id,
-              format_time(lease.expires_at)
-            ]
-          end)
-
-        print_table(["ID", "TYPE", "RESOURCE", "OWNER", "STATUS", "CORRELATION", "EXPIRES"], rows)
-      end
-    end
-  end
-
-  defp print_lease(label, lease, opts) do
-    if opts[:json] do
-      print_json(json_lease(lease))
-    else
-      IO.puts("#{label} #{lease.lease_id}")
-      IO.puts("resource: #{lease.resource_type}:#{lease.resource_id}")
-      IO.puts("owner: #{lease.owner}")
-      IO.puts("status: #{lease.status}")
-      IO.puts("correlation_id: #{lease.correlation_id}")
-      IO.puts("expires_at: #{format_time(lease.expires_at)}")
-    end
-  end
-
   defp print_timeline(timeline, opts) do
     if opts[:json] do
       print_json(%{
@@ -8173,22 +8022,6 @@ defmodule JX.CLI do
   end
 
   defp timeline_lease_resource(_payload), do: "approval:<id>"
-
-  defp json_lease(lease) do
-    %{
-      lease_id: lease.lease_id,
-      resource_type: lease.resource_type,
-      resource_id: lease.resource_id,
-      owner: lease.owner,
-      status: lease.status,
-      correlation_id: lease.correlation_id,
-      reason: lease.reason,
-      acquired_at: lease.acquired_at,
-      expires_at: lease.expires_at,
-      released_at: lease.released_at,
-      reassigned_at: lease.reassigned_at
-    }
-  end
 
   defp json_operational_event(event) do
     %{
@@ -13034,18 +12867,6 @@ defmodule JX.CLI do
     "#{runtimes_ls_usage()} | #{runtimes_provision_usage()} | #{runtimes_assign_usage()} | jx runtimes show <runtime-id> [--json] | jx runtimes release <runtime-id> [--json]"
   end
 
-  defp leases_ls_usage do
-    "jx leases ls [--owner <owner>] [--status active|released|expired|reassigned|all] [--resource approval:<id>|action:<id>|workspace:<id>] [--stale] [-n 50] [--json]"
-  end
-
-  defp leases_acquire_usage do
-    "jx leases acquire approval|action|workspace <id> --owner <owner> [--ttl-seconds 900] [--json]"
-  end
-
-  defp leases_reassign_usage do
-    "jx leases reassign approval|action|workspace <id> --owner <owner> [--ttl-seconds 900] [--json]"
-  end
-
   defp help_group_usages do
     %{
       "approvals" => ApprovalsCLI.usage_lines(),
@@ -13079,12 +12900,7 @@ defmodule JX.CLI do
       "fanout" => [FanoutCLI.usage()],
       "host" => HostCLI.usage_lines(:host),
       "hosts" => HostCLI.usage_lines(:hosts),
-      "leases" => [
-        leases_ls_usage(),
-        leases_acquire_usage(),
-        "jx leases release <lease-id> --owner <owner> [--json]",
-        leases_reassign_usage()
-      ],
+      "leases" => LeasesCLI.usage_lines(),
       "meet" => [meet_usage()],
       "modes" => [modes_usage()],
       "monitor" => [monitor_usage(), orchestrate_usage(), orchestrator_usage()],
