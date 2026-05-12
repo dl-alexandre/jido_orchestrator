@@ -24,6 +24,9 @@ defmodule JX.CLI do
   alias JX.WakeTriggers
   alias JX.Workspace
 
+  import JX.CLI.Support,
+    only: [expect_no_args: 2, print_json: 1, print_table: 2, validate_options: 1]
+
   @version Mix.Project.config()[:version]
 
   def main(args) do
@@ -8197,12 +8200,6 @@ defmodule JX.CLI do
     |> Keyword.fetch!(:database)
   end
 
-  defp validate_options([]), do: :ok
-  defp validate_options(invalid), do: {:error, "invalid options: #{inspect(invalid)}"}
-
-  defp expect_no_args([], _usage), do: :ok
-  defp expect_no_args(_args, usage), do: {:error, "usage: #{usage}"}
-
   defp validate_fanout_launch_target(:invalid, _all?),
     do: {:error, "usage: #{fanout_launch_usage()}"}
 
@@ -14595,12 +14592,6 @@ defmodule JX.CLI do
   defp print_saved_count(nil), do: :ok
   defp print_saved_count(count), do: IO.puts("saved #{count} observations")
 
-  defp print_json(data) do
-    data
-    |> Jason.encode!(pretty: true)
-    |> IO.puts()
-  end
-
   defp print_fanout_plan(result, json: true), do: print_json(result)
 
   defp print_fanout_plan(result, json: false) do
@@ -15053,28 +15044,6 @@ defmodule JX.CLI do
 
   defp short_sha(nil), do: ""
   defp short_sha(value), do: value |> to_string() |> String.slice(0, 12)
-
-  defp print_table(headers, rows) do
-    widths =
-      [headers | rows]
-      |> Enum.zip()
-      |> Enum.map(fn column ->
-        column
-        |> Tuple.to_list()
-        |> Enum.map(&String.length/1)
-        |> Enum.max()
-      end)
-
-    print_row(headers, widths)
-    Enum.each(rows, &print_row(&1, widths))
-  end
-
-  defp print_row(row, widths) do
-    row
-    |> Enum.zip(widths)
-    |> Enum.map(fn {value, width} -> String.pad_trailing(value, width + 2) end)
-    |> IO.puts()
-  end
 
   defp format_time(nil), do: "-"
   defp format_time(%DateTime{} = value), do: DateTime.to_iso8601(value)
