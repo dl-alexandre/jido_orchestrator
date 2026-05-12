@@ -14,6 +14,7 @@ defmodule JX.CLI do
   alias JX.CLI.Host, as: HostCLI
   alias JX.CLI.Leases, as: LeasesCLI
   alias JX.CLI.Project, as: ProjectCLI
+  alias JX.CLI.Queue, as: QueueCLI
   alias JX.CLI.Runners, as: RunnersCLI
   alias JX.CLI.Runtimes, as: RuntimesCLI
   alias JX.CLI.Session, as: SessionCLI
@@ -3082,85 +3083,7 @@ defmodule JX.CLI do
 
   defp dispatch(["assignments" | args]), do: AssignmentsCLI.run(args, start_app: &start_app/0)
 
-  defp dispatch(["queue", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          kind: :string,
-          workspace: :string,
-          owner: :string,
-          risk: :string,
-          freshness: :string,
-          sort: :string,
-          stale_after_seconds: :integer,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 50
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, queue_ls_usage()),
-         :ok <- validate_optional_queue_kind(opts[:kind]),
-         :ok <- validate_optional_queue_risk(opts[:risk]),
-         :ok <- validate_optional_freshness(opts[:freshness]),
-         :ok <- validate_optional_queue_sort(opts[:sort]),
-         :ok <- validate_positive("n", limit),
-         :ok <- validate_optional_positive("stale-after-seconds", opts[:stale_after_seconds]),
-         :ok <- start_app() do
-      Workspace.operational_queue(
-        kind: opts[:kind],
-        workspace_id: opts[:workspace],
-        owner: opts[:owner],
-        risk: opts[:risk],
-        freshness: opts[:freshness],
-        sort: opts[:sort],
-        stale_after_seconds: opts[:stale_after_seconds] || 15 * 60,
-        limit: limit
-      )
-      |> print_queue(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["queue", "workspace", workspace_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [stale_after_seconds: :integer, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx queue workspace <workspace-id> [--json]"),
-         :ok <- validate_optional_positive("stale-after-seconds", opts[:stale_after_seconds]),
-         :ok <- start_app() do
-      workspace_id
-      |> Workspace.operational_workspace(
-        stale_after_seconds: opts[:stale_after_seconds] || 15 * 60
-      )
-      |> print_queue_workspace(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["queue", "rebuild" | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx queue rebuild [--json]"),
-         :ok <- start_app() do
-      Workspace.operational_rebuilt_state()
-      |> print_rebuilt_state(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["queue" | _args]),
-    do:
-      {:error,
-       "usage: #{queue_ls_usage()} | jx queue workspace <workspace-id> [--json] | jx queue rebuild [--json]"}
+  defp dispatch(["queue" | args]), do: QueueCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["dashboard", "workspace", workspace_id | args]) do
     {opts, rest, invalid} =
@@ -6298,17 +6221,6 @@ defmodule JX.CLI do
   defp validate_optional_positive(_name, nil), do: :ok
   defp validate_optional_positive(name, value), do: validate_positive(name, value)
 
-  defp validate_optional_queue_kind(nil), do: :ok
-
-  defp validate_optional_queue_kind(kind)
-       when kind in ~w(workspace approval action lease agent runner assignment session),
-       do: :ok
-
-  defp validate_optional_queue_kind(kind),
-    do:
-      {:error,
-       "unsupported queue kind #{inspect(kind)}; expected workspace, approval, action, lease, agent, runner, assignment, or session"}
-
   defp validate_optional_runner_session_status(nil), do: :ok
 
   defp validate_optional_runner_session_status(status)
@@ -6319,31 +6231,6 @@ defmodule JX.CLI do
     do:
       {:error,
        "unsupported session status #{inspect(status)}; expected created, claimed, running, progressed, completed, failed, stale, expired, ended, active, or all"}
-
-  defp validate_optional_queue_risk(nil), do: :ok
-
-  defp validate_optional_queue_risk(risk)
-       when risk in ~w(blocked stale risky awaiting_operator healthy),
-       do: :ok
-
-  defp validate_optional_queue_risk(risk),
-    do:
-      {:error,
-       "unsupported queue risk #{inspect(risk)}; expected blocked, stale, risky, awaiting_operator, or healthy"}
-
-  defp validate_optional_freshness(nil), do: :ok
-  defp validate_optional_freshness(freshness) when freshness in ~w(fresh stale unknown), do: :ok
-
-  defp validate_optional_freshness(freshness),
-    do: {:error, "unsupported freshness #{inspect(freshness)}; expected fresh, stale, or unknown"}
-
-  defp validate_optional_queue_sort(nil), do: :ok
-  defp validate_optional_queue_sort(sort) when sort in ~w(urgency freshness owner risk), do: :ok
-
-  defp validate_optional_queue_sort(sort),
-    do:
-      {:error,
-       "unsupported queue sort #{inspect(sort)}; expected urgency, freshness, owner, or risk"}
 
   defp validate_timeline_scope(scope)
        when scope in ~w(workspace approval action assignment agent runner session),
@@ -6588,114 +6475,6 @@ defmodule JX.CLI do
         rows
       )
     end
-  end
-
-  defp print_queue(queue, opts) do
-    if opts[:json] do
-      print_json(queue)
-    else
-      IO.puts("attention queue")
-      IO.puts("generated: #{format_time(queue.generated_at)}")
-      IO.puts("stale_after_seconds: #{queue.stale_after_seconds}")
-      print_summary_counts("queue totals", queue.totals)
-
-      rows =
-        Enum.map(queue.items, fn item ->
-          [
-            item.type,
-            item.id,
-            item.risk,
-            item.reason,
-            item.freshness,
-            item.urgency,
-            blank_to_dash(item.owner),
-            blank_to_dash(item.workspace_id),
-            truncate(item.summary, 72),
-            item.next
-          ]
-        end)
-
-      if rows == [] do
-        IO.puts("")
-        IO.puts("no attention items")
-      else
-        IO.puts("")
-
-        print_table(
-          [
-            "TYPE",
-            "ID",
-            "RISK",
-            "REASON",
-            "FRESH",
-            "URG",
-            "OWNER",
-            "WORKSPACE",
-            "SUMMARY",
-            "NEXT"
-          ],
-          rows
-        )
-      end
-    end
-  end
-
-  defp print_queue_workspace(report, opts) do
-    if opts[:json] do
-      print_json(report)
-    else
-      IO.puts("workspace queue #{report.workspace_id}")
-      IO.puts("generated: #{format_time(report.generated_at)}")
-      print_summary_counts("health", Map.take(report.health, [:status, :freshness, :risk]))
-
-      print_queue_workspace_list("approvals", report.approvals, [
-        :approval_id,
-        :kind,
-        :severity,
-        :freshness,
-        :owner
-      ])
-
-      print_queue_workspace_list("actions", report.actions, [
-        :action_id,
-        :action,
-        :status,
-        :outcome,
-        :owner
-      ])
-
-      print_queue_workspace_list("leases", report.leases, [
-        :lease_id,
-        :resource_type,
-        :resource_id,
-        :owner,
-        :status
-      ])
-
-      IO.puts("")
-      IO.puts("next")
-      IO.puts("  approvals: #{report.next.approvals}")
-      IO.puts("  devide_status: #{report.next.devide_status}")
-      IO.puts("  timeline: #{report.next.timeline}")
-    end
-  end
-
-  defp print_queue_workspace_list(label, [], _fields) do
-    IO.puts("")
-    IO.puts("#{label}: none")
-  end
-
-  defp print_queue_workspace_list(label, items, fields) do
-    IO.puts("")
-    IO.puts(label)
-
-    rows =
-      Enum.map(items, fn item ->
-        Enum.map(fields, fn field -> item |> Map.get(field, "") |> blank_to_dash() end)
-      end)
-
-    headers = Enum.map(fields, &(&1 |> Atom.to_string() |> String.upcase()))
-    print_table(headers, rows)
   end
 
   defp print_operator_dashboard(report, opts) do
@@ -7013,16 +6792,6 @@ defmodule JX.CLI do
 
   defp dashboard_value(value) when is_map(value), do: Jason.encode!(value)
   defp dashboard_value(value), do: value |> blank_to_dash() |> truncate(80)
-
-  defp print_rebuilt_state(report, opts) do
-    if opts[:json] do
-      print_json(report)
-    else
-      IO.puts("rebuilt operational state")
-      IO.puts("events: #{report.events}")
-      print_summary_counts("queue", report.queue)
-    end
-  end
 
   defp print_events_check(report, opts) do
     if opts[:json] do
@@ -11806,10 +11575,6 @@ defmodule JX.CLI do
     "jx sessions ls [--status created|claimed|running|progressed|completed|failed|stale|expired|ended|active|all] [--runner <id>] [--workspace <id>] [--assignment <id>] [-n 50] [--json]"
   end
 
-  defp queue_ls_usage do
-    "jx queue ls [--kind workspace|approval|action|lease|agent|runner|assignment|session] [--workspace <id>] [--owner <owner>] [--risk blocked|stale|risky|awaiting_operator] [--freshness fresh|stale|unknown] [--sort urgency|freshness|owner|risk] [--stale-after-seconds 900] [-n 50] [--json]"
-  end
-
   defp dashboard_usage do
     "jx dashboard [--stale-after-seconds 900] [--events 25] [-n 50] [--json]"
   end
@@ -11873,11 +11638,7 @@ defmodule JX.CLI do
       ],
       "portfolio" => [portfolio_summary_usage(), call_brief_usage()],
       "promote" => [promote_usage()],
-      "queue" => [
-        queue_ls_usage(),
-        "jx queue workspace <workspace-id> [--json]",
-        "jx queue rebuild [--json]"
-      ],
+      "queue" => QueueCLI.usage_lines(),
       "project" => ProjectCLI.usage(),
       "repo" => [repo_doctor_usage(), repo_gate_usage()],
       "session" => SessionCLI.usage_lines(),
