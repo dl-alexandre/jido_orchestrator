@@ -6,6 +6,7 @@ defmodule JX.CLI do
   alias JX.AgentRunner
   alias JX.CiDigest
   alias JX.CLI.Actions, as: ActionsCLI
+  alias JX.CLI.Agents, as: AgentsCLI
   alias JX.CLI.Approvals, as: ApprovalsCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
   alias JX.CLI.Fanout, as: FanoutCLI
@@ -3157,69 +3158,7 @@ defmodule JX.CLI do
 
   defp dispatch(["runners" | _args]), do: {:error, "usage: #{runners_usage()}"}
 
-  defp dispatch(["agents", "register", agent_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          name: :string,
-          capability: :keep,
-          workspace: :keep,
-          ttl_seconds: :integer,
-          json: :boolean
-        ]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, agents_register_usage()),
-         :ok <- validate_optional_positive("ttl-seconds", opts[:ttl_seconds]),
-         :ok <- start_app(),
-         {:ok, agent} <-
-           Workspace.register_agent(%{
-             agent_id: agent_id,
-             name: opts[:name] || agent_id,
-             capabilities: Keyword.get_values(opts, :capability),
-             workspace_affinity: Keyword.get_values(opts, :workspace),
-             heartbeat_ttl_seconds: opts[:ttl_seconds] || 120
-           }) do
-      print_agent("registered", agent, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["agents", "heartbeat", agent_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx agents heartbeat <agent-id> [--json]"),
-         :ok <- start_app(),
-         {:ok, agent} <- Workspace.heartbeat_agent(agent_id) do
-      print_agent("heartbeat", agent, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["agents", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [status: :string, n: :integer, json: :boolean],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 50
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, agents_ls_usage()),
-         :ok <- validate_optional_agent_status(opts[:status]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_agents(status: opts[:status], limit: limit)
-      |> print_agents(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["agents" | _args]), do: {:error, "usage: #{agents_usage()}"}
+  defp dispatch(["agents" | args]), do: AgentsCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["assignments", "create", action_id | args]) do
     {opts, rest, invalid} =
@@ -7347,17 +7286,6 @@ defmodule JX.CLI do
       {:error,
        "unsupported queue kind #{inspect(kind)}; expected workspace, approval, action, lease, agent, runner, assignment, or session"}
 
-  defp validate_optional_agent_status(nil), do: :ok
-
-  defp validate_optional_agent_status(status)
-       when status in ~w(idle busy stale disabled all),
-       do: :ok
-
-  defp validate_optional_agent_status(status),
-    do:
-      {:error,
-       "unsupported agent status #{inspect(status)}; expected idle, busy, stale, disabled, or all"}
-
   defp validate_optional_runner_status(nil), do: :ok
 
   defp validate_optional_runner_status(status)
@@ -8307,44 +8235,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_agents(agents, opts) do
-    if opts[:json] do
-      print_json(%{agents: agents})
-    else
-      if agents == [] do
-        IO.puts("no agents")
-      else
-        rows =
-          Enum.map(agents, fn agent ->
-            [
-              agent.agent_id,
-              agent.status,
-              Enum.join(agent.capabilities, ","),
-              Enum.join(agent.workspace_affinity, ","),
-              to_string(agent.active_assignments),
-              format_time(agent.last_heartbeat_at)
-            ]
-          end)
-
-        print_table(["ID", "STATUS", "CAPABILITIES", "WORKSPACES", "ACTIVE", "HEARTBEAT"], rows)
-      end
-    end
-  end
-
-  defp print_agent(label, agent, opts) do
-    packet = json_agent(agent)
-
-    if opts[:json] do
-      print_json(packet)
-    else
-      IO.puts("#{label} #{packet.agent_id}")
-      IO.puts("status: #{packet.status}")
-      IO.puts("capabilities: #{Enum.join(packet.capabilities, ",")}")
-      IO.puts("workspace_affinity: #{Enum.join(packet.workspace_affinity, ",")}")
-      IO.puts("last_heartbeat_at: #{format_time(packet.last_heartbeat_at)}")
-    end
-  end
-
   defp print_runners(runners, opts) do
     if opts[:json] do
       print_json(%{runners: Enum.map(runners, &json_runner/1)})
@@ -8590,20 +8480,6 @@ defmodule JX.CLI do
       )
     end
   end
-
-  defp json_agent(%JX.DelegatedExecution.Agent{} = agent) do
-    %{
-      agent_id: agent.agent_id,
-      name: agent.name,
-      status: agent.status,
-      capabilities: decode_json_list(agent.capabilities),
-      workspace_affinity: decode_json_list(agent.workspace_affinity),
-      heartbeat_ttl_seconds: agent.heartbeat_ttl_seconds,
-      last_heartbeat_at: agent.last_heartbeat_at
-    }
-  end
-
-  defp json_agent(%{} = agent), do: agent
 
   defp json_runner(%JX.DelegatedExecution.Runner{} = runner) do
     %{
@@ -13616,18 +13492,6 @@ defmodule JX.CLI do
     ]
   end
 
-  defp agents_register_usage do
-    "jx agents register <agent-id> [--name <name>] [--capability <cap>] [--workspace <id>] [--ttl-seconds 120] [--json]"
-  end
-
-  defp agents_ls_usage do
-    "jx agents ls [--status idle|busy|stale|disabled|all] [-n 50] [--json]"
-  end
-
-  defp agents_usage do
-    "#{agents_register_usage()} | jx agents heartbeat <agent-id> [--json] | #{agents_ls_usage()}"
-  end
-
   defp runners_register_usage do
     "jx runners register <runner-id> [--agent <agent-id>] [--host <host>] [--capability <cap>] [--workspace <id>] [--ttl-seconds 120] [--tmux-server <server>] [--tmux-session-prefix <prefix>] [--json]"
   end
@@ -13718,11 +13582,7 @@ defmodule JX.CLI do
     %{
       "approvals" => ApprovalsCLI.usage_lines(),
       "actions" => ActionsCLI.usage_lines(),
-      "agents" => [
-        agents_register_usage(),
-        "jx agents heartbeat <agent-id> [--json]",
-        agents_ls_usage()
-      ],
+      "agents" => AgentsCLI.usage_lines(),
       "runners" => [
         runners_register_usage(),
         "jx runners heartbeat <runner-id> [--session <id>] [--json]",
