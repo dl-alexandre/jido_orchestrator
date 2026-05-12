@@ -17,16 +17,15 @@ defmodule JX.CLI do
   alias JX.CLI.Runners, as: RunnersCLI
   alias JX.CLI.Runtimes, as: RuntimesCLI
   alias JX.CLI.Session, as: SessionCLI
+  alias JX.CLI.SSH, as: SSHCLI
   alias JX.CLI.Tmux, as: TmuxCLI
   alias JX.Migrations
   alias JX.MonitorEvents
   alias JX.NextStep
   alias JX.OrchestratorDaemon
   alias JX.OrchestratorHeartbeats
-  alias JX.PaneTransport
   alias JX.ProcessInventory
   alias JX.RepoDoctor
-  alias JX.SSHSessions
   alias JX.Tmux
   alias JX.TUI
   alias JX.UsageModes
@@ -3684,62 +3683,7 @@ defmodule JX.CLI do
     {:error, "usage: jx process ls [--kind codex|claude|opencode|ssh|sshd|tmux] [--all]"}
   end
 
-  defp dispatch(["ssh", "ls"]) do
-    with :ok <- start_app(),
-         {:ok, sessions} <- SSHSessions.list(Workspace.list_hosts()) do
-      print_ssh_sessions(sessions)
-      :ok
-    end
-  end
-
-  defp dispatch(["ssh", "probe" | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [target: :string])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx ssh probe [--target <target>]"),
-         {:ok, targets} <- ssh_probe_targets(opts[:target]),
-         {:ok, probes} <- SSHSessions.probe(targets) do
-      print_ssh_probes(probes)
-      :ok
-    end
-  end
-
-  defp dispatch(["ssh", "pane-probe" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          all: :boolean,
-          target: :string,
-          dry_run: :boolean,
-          server: :string,
-          session: :string,
-          window: :integer,
-          pane: :integer,
-          timeout_ms: :integer
-        ]
-      )
-
-    server = opts[:server] || Tmux.managed_server()
-    window = opts[:window] || 0
-    pane = opts[:pane] || 0
-    timeout_ms = opts[:timeout_ms] || 5_000
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, ssh_pane_probe_usage()),
-         :ok <- validate_non_negative("window", window),
-         :ok <- validate_non_negative("pane", pane),
-         :ok <- validate_positive("timeout-ms", timeout_ms) do
-      if opts[:all] do
-        run_ssh_pane_probe_all(opts[:target], timeout_ms, opts[:dry_run] || false)
-      else
-        run_ssh_pane_probe_one(opts, server, window, pane, timeout_ms)
-      end
-    end
-  end
-
-  defp dispatch(["ssh" | _args]) do
-    {:error, "usage: jx ssh ls | jx ssh probe [--target <target>] | #{ssh_pane_probe_usage()}"}
-  end
+  defp dispatch(["ssh" | args]), do: SSHCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["session" | args]), do: SessionCLI.run(args, start_app: &start_app/0)
 
@@ -4251,10 +4195,6 @@ defmodule JX.CLI do
 
   defp task_adopt_activity_usage do
     "jx task adopt-activity <project> --server <server> --session <name> [--window 0] [--pane 0] [--agent claude|opencode|codex]"
-  end
-
-  defp ssh_pane_probe_usage do
-    "jx ssh pane-probe --all [--target <ssh-target>] [--dry-run] [--timeout-ms 5000] | jx ssh pane-probe --session <name> [--server <server>] [--window 0] [--pane 0] [--timeout-ms 5000]"
   end
 
   defp monitor_usage do
@@ -6431,47 +6371,11 @@ defmodule JX.CLI do
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp ssh_probe_targets(nil), do: SSHSessions.active_targets()
-  defp ssh_probe_targets(target), do: {:ok, [target]}
-
   defp maybe_save_snapshot(_report, false), do: {:ok, nil}
 
   defp maybe_save_snapshot(report, true) do
     with {:ok, observations} <- Workspace.record_session_observations(report) do
       {:ok, length(observations)}
-    end
-  end
-
-  defp run_ssh_pane_probe_all(target, timeout_ms, dry_run?) do
-    with :ok <- start_app(),
-         {:ok, sessions} <- SSHSessions.list(Workspace.list_hosts()) do
-      if dry_run? do
-        sessions
-        |> PaneTransport.ssh_pane_candidates(target: target)
-        |> print_pane_probe_candidates()
-      else
-        sessions
-        |> PaneTransport.probe_ssh_sessions(target: target, timeout_ms: timeout_ms)
-        |> print_pane_probe_scan()
-      end
-
-      :ok
-    end
-  end
-
-  defp run_ssh_pane_probe_one(opts, server, window, pane, timeout_ms) do
-    with :ok <- validate_tmux_server(server),
-         {:ok, session_name} <- required_option(opts, :session, ssh_pane_probe_usage()),
-         {:ok, probe} <-
-           PaneTransport.probe(
-             session_name: session_name,
-             tmux_server: server,
-             window: window,
-             pane: pane,
-             timeout_ms: timeout_ms
-           ) do
-      print_pane_probe(probe)
-      :ok
     end
   end
 
@@ -9250,79 +9154,6 @@ defmodule JX.CLI do
     print_table(["KIND", "PID", "PPID", "STAT", "TTY", "COMMAND"], rows)
   end
 
-  defp print_ssh_sessions([]), do: IO.puts("no ssh sessions")
-
-  defp print_ssh_sessions(sessions) do
-    rows =
-      Enum.map(sessions, fn session ->
-        [
-          session.role,
-          Integer.to_string(session.pid),
-          session.stat,
-          session.tty,
-          session.target,
-          session.registered_host,
-          session.server,
-          session.session,
-          format_optional_integer(session.window),
-          format_optional_integer(session.pane),
-          truncate(session.current_path, 72),
-          truncate(session.title, 48),
-          truncate(session.command, 96)
-        ]
-      end)
-
-    print_table(
-      [
-        "ROLE",
-        "PID",
-        "STAT",
-        "TTY",
-        "TARGET",
-        "HOST",
-        "SERVER",
-        "SESSION",
-        "WIN",
-        "PANE",
-        "PATH",
-        "TITLE",
-        "COMMAND"
-      ],
-      rows
-    )
-  end
-
-  defp print_ssh_probes([]), do: IO.puts("no ssh targets")
-
-  defp print_ssh_probes(probes) do
-    rows =
-      Enum.map(probes, fn probe ->
-        [
-          probe.target,
-          probe.ssh,
-          probe.tmux,
-          Integer.to_string(probe.sessions),
-          truncate(Map.get(probe, :detail, ""), 120)
-        ]
-      end)
-
-    print_table(["TARGET", "SSH", "TMUX", "SESSIONS", "DETAIL"], rows)
-  end
-
-  defp print_pane_probe(probe) do
-    print_table(
-      ["PANE", "TMUX", "SESSIONS", "DETAIL"],
-      [
-        [
-          probe.target,
-          probe.tmux,
-          Integer.to_string(probe.sessions),
-          truncate(pane_probe_detail(probe), 120)
-        ]
-      ]
-    )
-  end
-
   defp print_pane_probe_scan([]), do: IO.puts("no ssh panes")
 
   defp print_pane_probe_scan(probes) do
@@ -12062,6 +11893,7 @@ defmodule JX.CLI do
         "jx sessions attach <session-id> [--json]",
         "jx sessions expire [--json]"
       ],
+      "ssh" => SSHCLI.usage_lines(),
       "tmux" => TmuxCLI.usage_lines(),
       "tui" => [tui_usage()],
       "wake" => [wake_usage()],
