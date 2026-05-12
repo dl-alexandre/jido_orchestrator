@@ -16,6 +16,7 @@ defmodule JX.CLI do
   alias JX.CLI.Project, as: ProjectCLI
   alias JX.CLI.Runners, as: RunnersCLI
   alias JX.CLI.Runtimes, as: RuntimesCLI
+  alias JX.CLI.Session, as: SessionCLI
   alias JX.Migrations
   alias JX.MonitorEvents
   alias JX.NextStep
@@ -3867,273 +3868,7 @@ defmodule JX.CLI do
     {:error, "usage: jx ssh ls | jx ssh probe [--target <target>] | #{ssh_pane_probe_usage()}"}
   end
 
-  defp dispatch(["session", "capture", ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [n: :integer], aliases: [n: :n])
-
-    lines = opts[:n] || 80
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx session capture <ref> [-n 80]"),
-         :ok <- validate_positive("n", lines),
-         :ok <- start_app(),
-         {:ok, output} <- Workspace.capture_session(ref, lines: lines) do
-      IO.write(output)
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "attach", ref | args]) do
-    {_opts, rest, invalid} = OptionParser.parse(args, strict: [])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx session attach <ref>"),
-         :ok <- start_app() do
-      Workspace.attach_session(ref)
-    end
-  end
-
-  defp dispatch(["session", "inspect", ref | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx session inspect <ref> [--json]"),
-         :ok <- start_app(),
-         {:ok, session} <- Workspace.get_session(ref) do
-      print_session_inspection(session, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "profile", ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          summary: :string,
-          objective: :string,
-          expect: :string,
-          next_prompt: :string,
-          prompt_status: :string,
-          strategy: :string,
-          notes: :string,
-          owner: :string,
-          risk: :string,
-          lifecycle: :string,
-          hypothesis: :string,
-          evidence: :string,
-          stale_after: :integer,
-          observe: :boolean,
-          lines: :integer,
-          json: :boolean
-        ]
-      )
-
-    lines = opts[:lines] || 40
-    attrs = session_profile_attrs(opts)
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx session profile <ref> [--summary <text>] [--objective <text>] [--expect <text>] [--next-prompt <text>] [--prompt-status none|draft|ready|sent|blocked] [--strategy <text>] [--notes <text>] [--owner <name>] [--risk low|normal|high|blocked] [--lifecycle active|parked|done|blocked] [--hypothesis <text>] [--evidence <text>] [--stale-after <seconds>] [--no-observe] [--lines 40] [--json]"
-           ),
-         :ok <- validate_optional_prompt_status(opts[:prompt_status]),
-         :ok <- validate_optional_risk_level(opts[:risk]),
-         :ok <- validate_optional_lifecycle_status(opts[:lifecycle]),
-         :ok <- validate_optional_positive("stale-after", opts[:stale_after]),
-         :ok <- validate_positive("lines", lines),
-         :ok <- start_app(),
-         :ok <- maybe_set_session_profile(ref, attrs),
-         {:ok, report} <-
-           Workspace.session_profiles(
-             ref: ref,
-             observe: Keyword.get(opts, :observe, true),
-             lines: lines,
-             limit: 1
-           ) do
-      print_session_profiles(report, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "mark", ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [mode: :string, project: :string, note: :string])
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx session mark <ref> --mode managed|ignored|protected [--project <name>] [--note <text>]"
-           ),
-         {:ok, mode} <-
-           required_option(
-             opts,
-             :mode,
-             "jx session mark <ref> --mode managed|ignored|protected [--project <name>] [--note <text>]"
-           ),
-         :ok <- validate_session_control_mode(mode),
-         :ok <- start_app(),
-         {:ok, control} <-
-           Workspace.set_session_control(ref, mode,
-             project: opts[:project] || "",
-             note: opts[:note] || ""
-           ) do
-      IO.puts("session #{control.ref} marked #{control.mode}")
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "unmark", ref | args]) do
-    {_opts, rest, invalid} = OptionParser.parse(args, strict: [])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx session unmark <ref>"),
-         :ok <- start_app(),
-         {:ok, _control} <- Workspace.clear_session_control(ref) do
-      IO.puts("session #{ref} unmarked")
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "send", ref | args]) do
-    {opts, message_parts, invalid} =
-      OptionParser.parse(args, strict: [no_enter: :boolean])
-
-    message = Enum.join(message_parts, " ") |> String.trim()
-
-    with :ok <- validate_options(invalid),
-         {:ok, message} <-
-           required_message(message, "jx session send <ref> \"<message>\" [--no-enter]"),
-         :ok <- start_app(),
-         {:ok, directive} <-
-           Workspace.send_session_prompt(ref, message, enter: !opts[:no_enter]) do
-      IO.puts("directive #{directive.directive_id} sent to session #{ref}")
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "key", ref | args]) do
-    {opts, key_parts, invalid} =
-      OptionParser.parse(args, strict: [no_enter: :boolean, json: :boolean])
-
-    keys = Enum.join(key_parts, " ") |> String.trim()
-
-    with :ok <- validate_options(invalid),
-         {:ok, keys} <-
-           required_message(keys, "jx session key <ref> \"<keys>\" [--no-enter] [--json]"),
-         :ok <- start_app(),
-         {:ok, result} <- Workspace.send_session_keys(ref, keys, enter: !opts[:no_enter]) do
-      if opts[:json], do: print_json(result), else: IO.puts("sent keys to session #{ref}")
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "probe", ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [timeout_ms: :integer, force: :boolean, json: :boolean])
-
-    timeout_ms = opts[:timeout_ms] || 5_000
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx session probe <ref> [--force] [--timeout-ms 5000] [--json]"
-           ),
-         :ok <- validate_positive("timeout-ms", timeout_ms),
-         :ok <- start_app(),
-         {:ok, probe} <-
-           Workspace.probe_session(ref, timeout_ms: timeout_ms, force: opts[:force] || false) do
-      print_session_probe(probe, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "stream-adopt", ref, project_name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [agent: :string, transport: :string, relaunch: :boolean, json: :boolean]
-      )
-
-    agent_name = opts[:agent]
-    agent_transport = opts[:transport] || AgentRunner.default_agent_transport()
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx session stream-adopt <ref> <project> [--agent claude|opencode|codex] [--transport native|acpx] [--relaunch] [--json]"
-           ),
-         :ok <- validate_optional_agent_name(agent_name),
-         :ok <- validate_agent_transport(agent_transport),
-         :ok <- start_app(),
-         {:ok, adoption} <-
-           Workspace.stream_adopt_session(ref, project_name,
-             agent_name: agent_name,
-             agent_transport: agent_transport,
-             relaunch: opts[:relaunch] || false
-           ) do
-      print_stream_adoption(adoption, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "resume-adopt", ref, project_name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [agent: :string, relaunch: :boolean, json: :boolean])
-
-    agent_name = opts[:agent]
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx session resume-adopt <ref> <project> [--agent claude|opencode|codex] [--relaunch] [--json]"
-           ),
-         :ok <- validate_optional_agent_name(agent_name),
-         :ok <- start_app(),
-         {:ok, adoption} <-
-           Workspace.resume_adopt_session(ref, project_name,
-             agent_name: agent_name,
-             relaunch: opts[:relaunch] || false
-           ) do
-      print_stream_adoption(adoption, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["session", "adopt", ref, project_name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [agent: :string])
-    agent_name = opts[:agent] || "claude"
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx session adopt <ref> <project> [--agent claude|opencode|codex]"
-           ),
-         :ok <- validate_agent_name(agent_name),
-         :ok <- start_app(),
-         {:ok, task} <- Workspace.adopt_session(ref, project_name, agent_name: agent_name) do
-      IO.puts("""
-      task #{task.task_id} adopted from session #{ref}
-      branch: #{task.branch}
-      worktree: #{task.worktree_path}
-      server: #{task.tmux_server}
-      session: #{task.session_name}
-      pane: #{task.window}.#{task.pane}
-      log: #{task.log_path}
-      """)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["session" | _args]) do
-    {:error,
-     "usage: jx session capture <ref> [-n 80] | jx session attach <ref> | jx session inspect <ref> [--json] | jx session profile <ref> [--summary <text>] [--objective <text>] [--expect <text>] [--next-prompt <text>] [--prompt-status none|draft|ready|sent|blocked] [--strategy <text>] [--notes <text>] [--no-observe] [--lines 40] [--json] | jx session mark <ref> --mode managed|ignored|protected [--project <name>] [--note <text>] | jx session unmark <ref> | jx session send <ref> \"<message>\" [--no-enter] | jx session key <ref> \"<keys>\" [--no-enter] [--json] | jx session probe <ref> [--force] [--timeout-ms 5000] [--json] | jx session resume-adopt <ref> <project> [--agent claude|opencode|codex] [--relaunch] [--json] | jx session stream-adopt <ref> <project> [--agent claude|opencode|codex] [--transport native|acpx] [--relaunch] [--json] | jx session adopt <ref> <project> [--agent claude|opencode|codex]"}
-  end
+  defp dispatch(["session" | args]), do: SessionCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["task", "adopt-tmux", project_name | args]) do
     {opts, rest, invalid} =
@@ -5936,9 +5671,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp validate_optional_agent_name(nil), do: :ok
-  defp validate_optional_agent_name(agent_name), do: validate_agent_name(agent_name)
-
   defp validate_agent_transport(agent_transport) do
     if agent_transport in AgentRunner.agent_transports() do
       :ok
@@ -6061,27 +5793,6 @@ defmodule JX.CLI do
     else
       {:error,
        "unsupported prompt status #{inspect(status)}; expected one of: #{Enum.join(statuses, ", ")}"}
-    end
-  end
-
-  defp validate_optional_risk_level(nil), do: :ok
-
-  defp validate_optional_risk_level(risk) do
-    if risk in ~w(low normal high blocked) do
-      :ok
-    else
-      {:error, "unsupported risk #{inspect(risk)}; expected one of: low, normal, high, blocked"}
-    end
-  end
-
-  defp validate_optional_lifecycle_status(nil), do: :ok
-
-  defp validate_optional_lifecycle_status(status) do
-    if status in ~w(active parked done blocked) do
-      :ok
-    else
-      {:error,
-       "unsupported lifecycle #{inspect(status)}; expected one of: active, parked, done, blocked"}
     end
   end
 
@@ -6914,23 +6625,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp session_profile_attrs(opts) do
-    %{}
-    |> put_present(:summary, opts[:summary])
-    |> put_present(:objective, opts[:objective])
-    |> put_present(:expected_completion, opts[:expect])
-    |> put_present(:next_prompt, opts[:next_prompt])
-    |> put_present(:prompt_status, opts[:prompt_status])
-    |> put_present(:strategy, opts[:strategy])
-    |> put_present(:notes, opts[:notes])
-    |> put_present(:owner, opts[:owner])
-    |> put_present(:risk_level, opts[:risk])
-    |> put_present(:lifecycle_status, opts[:lifecycle])
-    |> put_present(:current_hypothesis, opts[:hypothesis])
-    |> put_present(:last_evidence, opts[:evidence])
-    |> put_present(:stale_after_seconds, opts[:stale_after])
-  end
-
   defp operator_profile_attrs(opts) do
     %{}
     |> put_present(:name, opts[:name])
@@ -6942,12 +6636,6 @@ defmodule JX.CLI do
 
   defp put_present(attrs, _key, nil), do: attrs
   defp put_present(attrs, key, value), do: Map.put(attrs, key, value)
-
-  defp maybe_set_session_profile(_ref, attrs) when map_size(attrs) == 0, do: :ok
-
-  defp maybe_set_session_profile(ref, attrs) do
-    with {:ok, _profile} <- Workspace.set_session_profile(ref, attrs), do: :ok
-  end
 
   defp configure_db(nil), do: :ok
 
@@ -9840,153 +9528,6 @@ defmodule JX.CLI do
     )
   end
 
-  defp print_session_probe(probe, opts) do
-    if opts[:json] do
-      print_json(probe)
-    else
-      print_session_probe_table(probe)
-    end
-  end
-
-  defp print_stream_adoption(adoption, opts) do
-    if opts[:json] do
-      print_json(adoption)
-    else
-      print_stream_adoption_text(adoption)
-    end
-  end
-
-  defp print_stream_adoption_text(%{status: "relaunched"} = adoption) do
-    task = adoption.task
-
-    IO.puts("""
-    task #{task.task_id} relaunched from session #{adoption.ref}
-    agent: #{task.agent_name}
-    transport: #{task.agent_transport}
-    branch: #{task.branch}
-    worktree: #{task.worktree_path}
-    server: #{task.tmux_server}
-    session: #{task.session_name}
-    pane: #{task.window}.#{task.pane}
-    log: #{task.log_path}
-    """)
-  end
-
-  defp print_stream_adoption_text(%{status: "adopted"} = adoption) do
-    task = adoption.task
-
-    IO.puts("""
-    task #{task.task_id} adopted from session #{adoption.ref}
-    agent: #{task.agent_name}
-    transport: #{task.agent_transport}
-    branch: #{task.branch}
-    worktree: #{task.worktree_path}
-    server: #{task.tmux_server}
-    session: #{task.session_name}
-    pane: #{task.window}.#{task.pane}
-    log: #{task.log_path}
-    """)
-  end
-
-  defp print_stream_adoption_text(%{status: "resume-available"} = adoption) do
-    session = adoption.session
-    next_action = adoption.next_action
-
-    IO.puts("session #{adoption.ref} can be resume-adopted")
-    IO.puts("reason: #{adoption.reason}")
-    IO.puts("process: #{session.kind} role=#{session.process_role} pid=#{session.pid || ""}")
-    IO.puts("resume: #{adoption.resume_ref}")
-    IO.puts("workspace: #{adoption.zed_workspace}")
-    IO.puts("next: #{next_action.command}")
-  end
-
-  defp print_stream_adoption_text(adoption) do
-    session = adoption.session
-    next_action = adoption.next_action
-
-    IO.puts("session #{adoption.ref} needs managed stream bridge")
-    IO.puts("reason: #{adoption.reason}")
-    IO.puts("process: #{session.kind} pid=#{session.pid || ""} tty=#{session.tty || ""}")
-    IO.puts("next: #{next_action.command}")
-  end
-
-  defp print_session_probe_table(probe) do
-    print_table(
-      ["REF", "SSH_TARGET", "PANE", "TMUX", "SESSIONS", "DETAIL"],
-      [
-        [
-          probe.ref,
-          probe.ssh_target,
-          probe.target,
-          probe.tmux,
-          Integer.to_string(probe.sessions),
-          truncate(Map.get(probe, :detail, ""), 120)
-        ]
-      ]
-    )
-
-    print_remote_sessions(Map.get(probe, :remote_sessions, []))
-  end
-
-  defp print_session_inspection(session, opts) do
-    if opts[:json] do
-      print_json(session)
-    else
-      print_session_inspection_table(session)
-    end
-  end
-
-  defp print_session_inspection_table(session) do
-    rows = [
-      ["ref", Map.get(session, :ref, "")],
-      ["host", Map.get(session, :host, "")],
-      ["transport", Map.get(session, :transport, "")],
-      ["type", Map.get(session, :type, "")],
-      ["state", Map.get(session, :state, "")],
-      ["control", Map.get(session, :control_mode, "uncontrolled")],
-      ["control_project", Map.get(session, :control_project, "")],
-      ["control_note", Map.get(session, :control_note, "")],
-      ["kind", Map.get(session, :kind, "")],
-      ["agent", Map.get(session, :agent_name, "")],
-      ["task", Map.get(session, :task_id, "")],
-      ["server", Map.get(session, :server, "")],
-      ["session", Map.get(session, :session, "")],
-      ["window", format_optional_integer(Map.get(session, :window))],
-      ["pane", format_optional_integer(Map.get(session, :pane))],
-      ["tty", Map.get(session, :tty, "")],
-      ["active", format_active(Map.get(session, :active))],
-      ["pid", format_optional_integer(Map.get(session, :pid))],
-      ["stat", Map.get(session, :stat, "")],
-      ["ssh_target", Map.get(session, :ssh_target, "")],
-      ["registered_host", Map.get(session, :registered_host, "")],
-      ["actions", Map.get(session, :actions, "")],
-      ["path", Map.get(session, :current_path, "")],
-      ["title", Map.get(session, :title, "")],
-      ["command", Map.get(session, :command, "")]
-    ]
-
-    print_table(["FIELD", "VALUE"], rows)
-  end
-
-  defp print_remote_sessions([]), do: IO.puts("no remote tmux sessions")
-
-  defp print_remote_sessions(remote_sessions) do
-    IO.puts("")
-
-    rows =
-      Enum.map(remote_sessions, fn session ->
-        [
-          session.server,
-          session.session,
-          Integer.to_string(session.attached),
-          Integer.to_string(session.windows),
-          truncate(session.current_path, 96)
-        ]
-      end)
-
-    print_table(["REMOTE_SERVER", "REMOTE_SESSION", "ATTACHED", "WINDOWS", "PATH"], rows)
-  end
-
   defp pane_probe_detail(%{error: reason}), do: format_error(reason)
 
   defp pane_probe_detail(%{remote_sessions: sessions}) when sessions != [] do
@@ -12690,6 +12231,7 @@ defmodule JX.CLI do
       ],
       "project" => ProjectCLI.usage(),
       "repo" => [repo_doctor_usage(), repo_gate_usage()],
+      "session" => SessionCLI.usage_lines(),
       "sessions" => [
         "jx sessions [--host <host>] [--managed] [--all-processes] [--type agent|process|ssh|task|tmux] [--action <action>] [--ssh-target <target>] [--json]",
         "jx sessions queues [--project <name>] [--host <host>] [--managed] [--all-processes] [--type agent|process|ssh|task|tmux] [--ssh-target <target>] [--work-state unobservable|unknown|blocked|running|waiting|idle] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 40] [--scan-limit 100] [-n 5] [--json]",
