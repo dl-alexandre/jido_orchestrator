@@ -11,6 +11,7 @@ defmodule JX.CLI do
   alias JX.CLI.Assignments, as: AssignmentsCLI
   alias JX.CLI.Dashboard, as: DashboardCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
+  alias JX.CLI.Events, as: EventsCLI
   alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
   alias JX.CLI.Leases, as: LeasesCLI
@@ -1977,143 +1978,7 @@ defmodule JX.CLI do
 
   defp dispatch(["monitor" | _args]), do: {:error, "usage: #{monitor_usage()}"}
 
-  defp dispatch(["events", "check" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [n: :integer, json: :boolean], aliases: [n: :n])
-
-    limit = opts[:n] || 10_000
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx events check [-n 10000] [--json]"),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.operational_events_check(limit: limit)
-      |> print_events_check(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["events", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          since: :integer,
-          ref: :string,
-          kind: :string,
-          severity: :string,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 20
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx events ls [--since <id>] [--ref <ref>] [--kind <kind>] [--severity info|notice|warning|critical] [-n 20] [--json]"
-           ),
-         :ok <- validate_optional_monitor_severity(opts[:severity]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_monitor_events(
-        since_id: opts[:since],
-        ref: opts[:ref],
-        kind: opts[:kind],
-        severity: opts[:severity],
-        limit: limit
-      )
-      |> print_monitor_events(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["events", "unread" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          consumer: :string,
-          ref: :string,
-          kind: :string,
-          severity: :string,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 20
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx events unread [--consumer <name>] [--ref <ref>] [--kind <kind>] [--severity info|notice|warning|critical] [-n 20] [--json]"
-           ),
-         :ok <- validate_optional_monitor_severity(opts[:severity]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app(),
-         {:ok, report} <-
-           Workspace.unread_monitor_events(
-             consumer: opts[:consumer],
-             ref: opts[:ref],
-             kind: opts[:kind],
-             severity: opts[:severity],
-             limit: limit
-           ) do
-      print_monitor_unread(report, json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["events", "ack" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [consumer: :string, to: :integer, latest: :boolean, json: :boolean]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx events ack [--consumer <name>] (--to <id> | --latest) [--json]"
-           ),
-         :ok <- validate_event_ack_opts(opts[:to], opts[:latest] || false),
-         :ok <- validate_optional_non_negative("to", opts[:to]),
-         :ok <- start_app(),
-         {:ok, cursor} <-
-           Workspace.acknowledge_monitor_events(
-             consumer: opts[:consumer],
-             to_id: opts[:to]
-           ) do
-      print_monitor_ack(cursor, json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["events", "cursor" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [consumer: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx events cursor [--consumer <name>] [--json]"),
-         :ok <- start_app() do
-      Workspace.monitor_event_status(consumer: opts[:consumer])
-      |> print_monitor_event_status(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["events" | _args]) do
-    {:error, "usage: #{events_usage()}"}
-  end
+  defp dispatch(["events" | args]), do: EventsCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["work", "ls" | args]), do: dispatch_work_board(args)
   defp dispatch(["work" | args]), do: dispatch_work_board(args)
@@ -4024,10 +3889,6 @@ defmodule JX.CLI do
 
   defp orchestrate_usage do
     "jx orchestrate step|run|start [--consumer orchestrator] [--execute] [--yes] [--ack|--no-ack] [--auto-plan] [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--prompt-status none|draft|ready|sent|blocked] [--no-observe] [--lines 40] [--scan-limit 100] [--queue-limit 5] [--event-limit 50] [--decision-limit 20] [--min-observe-age-seconds 30] [--interval-ms 30000] [--iterations 0] [--no-enter] [--json]"
-  end
-
-  defp events_usage do
-    "jx events check [-n 10000] [--json] | jx events ls [--since <id>] [--ref <ref>] [--kind <kind>] [--severity info|notice|warning|critical] [-n 20] [--json] | jx events unread [--consumer <name>] [--ref <ref>] [--kind <kind>] [--severity info|notice|warning|critical] [-n 20] [--json] | jx events ack [--consumer <name>] (--to <id> | --latest) [--json] | jx events cursor [--consumer <name>] [--json]"
   end
 
   defp ci_digest_usage do
@@ -6049,14 +5910,6 @@ defmodule JX.CLI do
   defp duration_multiplier("d"), do: 24 * 60 * 60
   defp duration_multiplier(_seconds), do: 1
 
-  defp validate_event_ack_opts(nil, false),
-    do: {:error, "jx events ack requires --to <id> or --latest"}
-
-  defp validate_event_ack_opts(to_id, true) when not is_nil(to_id),
-    do: {:error, "jx events ack accepts either --to <id> or --latest, not both"}
-
-  defp validate_event_ack_opts(_to_id, _latest), do: :ok
-
   defp notification_ack_opts([], opts) do
     if opts[:all] do
       {:ok, [ref: opts[:ref], project: opts[:project]]}
@@ -6352,48 +6205,6 @@ defmodule JX.CLI do
         ],
         rows
       )
-    end
-  end
-
-  defp print_events_check(report, opts) do
-    if opts[:json] do
-      print_json(report)
-    else
-      IO.puts("operational event check: #{report.status}")
-      IO.puts("checked: #{format_time(report.checked_at)}")
-      IO.puts("events: #{report.events}")
-      print_summary_counts("rebuilt", report.rebuilt)
-
-      print_summary_counts(
-        "queue",
-        Map.take(report.queue, [:open_approvals, :planned_actions, :active_leases])
-      )
-
-      if report.issues == [] do
-        IO.puts("")
-        IO.puts("issues: none")
-      else
-        rows =
-          Enum.map(report.issues, fn issue ->
-            [
-              issue.severity,
-              issue.problem,
-              blank_to_dash(issue.id),
-              "#{issue.entity_type}:#{issue.entity_id}",
-              truncate(issue.summary, 72),
-              truncate(issue.next, 72)
-            ]
-          end)
-
-        IO.puts("")
-        print_table(["SEVERITY", "PROBLEM", "ID", "ENTITY", "SUMMARY", "NEXT"], rows)
-      end
-
-      unless report.next == [] do
-        IO.puts("")
-        IO.puts("next")
-        Enum.each(report.next, &IO.puts("  - #{&1}"))
-      end
     end
   end
 
@@ -9666,34 +9477,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_monitor_unread(report, opts) do
-    if opts[:json] do
-      print_json(json_monitor_unread(report))
-    else
-      print_summary_counts("events", %{
-        unread: report.unread_total,
-        matching_unread: report.matching_unread_total,
-        returned: report.returned,
-        latest_event: report.latest_event_id
-      })
-
-      IO.puts("")
-      print_monitor_cursor(report.cursor)
-
-      IO.puts("")
-      print_monitor_events(report.events, json: false)
-    end
-  end
-
-  defp print_monitor_ack(cursor, opts) do
-    if opts[:json] do
-      print_json(%{cursor: json_monitor_cursor(cursor)})
-    else
-      IO.puts("acknowledged #{cursor.consumer} through event #{cursor.last_event_id}")
-      print_monitor_cursor(cursor)
-    end
-  end
-
   defp print_monitor_event_status(status, opts) do
     if opts[:json] do
       print_json(json_monitor_event_status(status))
@@ -10309,18 +10092,6 @@ defmodule JX.CLI do
       fingerprint: event.fingerprint,
       payload: observation_snapshot(event.payload),
       inserted_at: format_time(event.inserted_at)
-    }
-  end
-
-  defp json_monitor_unread(report) do
-    %{
-      consumer: report.consumer,
-      cursor: json_monitor_cursor(report.cursor),
-      latest_event_id: report.latest_event_id,
-      unread_total: report.unread_total,
-      matching_unread_total: report.matching_unread_total,
-      returned: report.returned,
-      events: Enum.map(report.events, &json_monitor_event/1)
     }
   end
 
@@ -11150,7 +10921,7 @@ defmodule JX.CLI do
       "delegate" => [delegate_usage()],
       "dashboard" => DashboardCLI.usage_lines(),
       "devide" => devide_usage(),
-      "events" => [events_usage()],
+      "events" => EventsCLI.usage_lines(),
       "fanout" => [FanoutCLI.usage()],
       "host" => HostCLI.usage_lines(:host),
       "hosts" => HostCLI.usage_lines(:hosts),
