@@ -6,9 +6,9 @@ defmodule JX.CLI do
   alias JX.AgentRunner
   alias JX.CiDigest
   alias JX.CLI.DevIDE, as: DevIDECLI
+  alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
   alias JX.CLI.Project, as: ProjectCLI
-  alias JX.Fanout
   alias JX.Migrations
   alias JX.MonitorEvents
   alias JX.NextStep
@@ -1300,168 +1300,7 @@ defmodule JX.CLI do
 
   defp dispatch(["delegate" | _args]), do: {:error, "usage: #{delegate_usage()}"}
 
-  defp dispatch(["fanout", "plan", plan_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          baseline: :string,
-          base_branch: :string,
-          root: :string,
-          run_id: :string,
-          coverage_file: :string,
-          host_count: :integer,
-          risk_rules: :string,
-          host: :keep,
-          base_path: :string,
-          worktree_root: :string,
-          validation_prefix: :string,
-          json: :boolean
-        ]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, fanout_plan_usage()),
-         {:ok, baseline} <- required_option(opts, :baseline, fanout_plan_usage()),
-         {:ok, result} <-
-           Fanout.plan(plan_id,
-             baseline: baseline,
-             base_branch: opts[:base_branch],
-             root: opts[:root],
-             run_id: opts[:run_id],
-             coverage_file: opts[:coverage_file],
-             host_count: opts[:host_count],
-             risk_rules: opts[:risk_rules],
-             host: Keyword.get_values(opts, :host),
-             base_path: opts[:base_path],
-             worktree_root: opts[:worktree_root],
-             validation_prefix: opts[:validation_prefix]
-           ) do
-      print_fanout_plan(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout", "preflight", run_ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [root: :string, ttl_seconds: :integer, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, fanout_preflight_usage()),
-         {:ok, result} <-
-           Fanout.preflight(run_ref,
-             root: opts[:root],
-             ttl_seconds: opts[:ttl_seconds]
-           ) do
-      print_fanout_preflight(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout", "launch", run_ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          all: :boolean,
-          root: :string,
-          lease_timeout_seconds: :integer,
-          codex_bin: :string,
-          tmux_server: :string,
-          json: :boolean
-        ]
-      )
-
-    target =
-      case rest do
-        [] -> :all
-        [assignment_id] -> assignment_id
-        _other -> :invalid
-      end
-
-    with :ok <- validate_options(invalid),
-         :ok <- validate_fanout_launch_target(target, opts[:all]),
-         {:ok, result} <-
-           Fanout.launch(run_ref, target,
-             root: opts[:root],
-             lease_timeout_seconds: opts[:lease_timeout_seconds],
-             codex_bin: opts[:codex_bin],
-             tmux_server: opts[:tmux_server]
-           ) do
-      print_fanout_launch(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout", "monitor", run_ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [root: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, fanout_monitor_usage()),
-         :ok <- start_app(),
-         {:ok, result} <- Fanout.monitor(run_ref, root: opts[:root]) do
-      print_fanout_monitor(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout", "ownership", run_ref, assignment_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [root: :string, warn_only: :boolean, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, fanout_ownership_usage()),
-         {:ok, result} <-
-           Fanout.ownership_check(run_ref, assignment_id,
-             root: opts[:root],
-             warn_only: opts[:warn_only] || false
-           ) do
-      print_fanout_ownership(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout", "pr", run_ref, assignment_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          root: :string,
-          repo: :string,
-          register_ci_watch: :boolean,
-          ci_watch_mode: :string,
-          allow_unvalidated: :boolean,
-          json: :boolean
-        ]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, fanout_pr_usage()),
-         :ok <- start_app(),
-         {:ok, result} <-
-           Fanout.open_pr(run_ref, assignment_id,
-             root: opts[:root],
-             repo: opts[:repo],
-             register_ci_watch: Keyword.get(opts, :register_ci_watch, true),
-             ci_watch_mode: opts[:ci_watch_mode],
-             allow_unvalidated: opts[:allow_unvalidated] || false
-           ) do
-      print_fanout_pr(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout", "status", run_ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [root: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, fanout_status_usage()),
-         {:ok, status} <- Fanout.status(run_ref, root: opts[:root]) do
-      print_fanout_status(status, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["fanout" | _args]), do: {:error, "usage: #{fanout_usage()}"}
+  defp dispatch(["fanout" | args]), do: FanoutCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["assign", project_name | args]) do
     {opts, prompt_parts, invalid} =
@@ -8053,16 +7892,6 @@ defmodule JX.CLI do
     |> Keyword.fetch!(:database)
   end
 
-  defp validate_fanout_launch_target(:invalid, _all?),
-    do: {:error, "usage: #{fanout_launch_usage()}"}
-
-  defp validate_fanout_launch_target(:all, _all?), do: :ok
-  defp validate_fanout_launch_target(_assignment_id, false), do: :ok
-  defp validate_fanout_launch_target(_assignment_id, nil), do: :ok
-
-  defp validate_fanout_launch_target(_assignment_id, true),
-    do: {:error, "use either --all or an assignment id, not both"}
-
   defp required_option(opts, key, usage) do
     case opts[key] do
       value when is_binary(value) and value != "" -> {:ok, value}
@@ -14299,144 +14128,6 @@ defmodule JX.CLI do
   defp print_saved_count(nil), do: :ok
   defp print_saved_count(count), do: IO.puts("saved #{count} observations")
 
-  defp print_fanout_plan(result, json: true), do: print_json(result)
-
-  defp print_fanout_plan(result, json: false) do
-    IO.puts("fanout run planned")
-    IO.puts("run: #{result.run_id}")
-    IO.puts("path: #{result.run_path}")
-    IO.puts("manifest: #{result.manifest_path}")
-    IO.puts("assignments: #{result.assignment_count}")
-
-    Enum.each(result.assignment_ids, &IO.puts("  #{&1}"))
-  end
-
-  defp print_fanout_preflight(result, json: true), do: print_json(result)
-
-  defp print_fanout_preflight(result, json: false) do
-    IO.puts("fanout preflight #{result.run_id}")
-    IO.puts("path: #{result.run_path}")
-    IO.puts("result: #{result.result}")
-    IO.puts("")
-
-    rows =
-      Enum.map(result.assignments, fn assignment ->
-        [
-          assignment.assignment_id,
-          assignment.host || "-",
-          assignment.state || "-",
-          assignment.publishability || "-",
-          Enum.join(assignment.failed_checks || [], ", ")
-        ]
-      end)
-
-    print_table(["assignment", "host", "state", "result", "failed checks"], rows)
-  end
-
-  defp print_fanout_launch(result, json: true), do: print_json(result)
-
-  defp print_fanout_launch(result, json: false) do
-    IO.puts("fanout launch #{result.run_id}")
-    IO.puts("path: #{result.run_path}")
-    IO.puts("")
-
-    rows =
-      Enum.map(result.assignments, fn assignment ->
-        [
-          assignment.assignment_id,
-          assignment.state,
-          assignment.agent_id,
-          assignment.session_name,
-          truncate(assignment.assignment_start_commit || "", 12),
-          assignment.goal_status || "-"
-        ]
-      end)
-
-    print_table(["assignment", "state", "agent", "session", "start", "goal"], rows)
-  end
-
-  defp print_fanout_monitor(result, json: true), do: print_json(result)
-
-  defp print_fanout_monitor(result, json: false) do
-    IO.puts("fanout monitor #{result.run_id}")
-    IO.puts("path: #{result.run_path}")
-    IO.puts("")
-
-    rows =
-      Enum.map(result.assignments, fn assignment ->
-        watch = assignment.ci_watch || %{}
-
-        [
-          assignment.assignment_id,
-          assignment.derived_state || "-",
-          assignment.completion_state || "-",
-          watch["watch_id"] || "-",
-          watch["status"] || "-"
-        ]
-      end)
-
-    print_table(["assignment", "state", "completion", "watch", "ci"], rows)
-  end
-
-  defp print_fanout_ownership(result, json: true), do: print_json(result)
-
-  defp print_fanout_ownership(result, json: false) do
-    IO.puts("fanout ownership #{result["assignment_id"]}")
-    IO.puts("status: #{result["status"]}")
-
-    unless result["warnings"] == [] do
-      IO.puts("warnings: #{Enum.join(result["warnings"], "; ")}")
-    end
-
-    unless result["outside_write_paths"] == [] do
-      IO.puts("outside write ownership:")
-      Enum.each(result["outside_write_paths"], &IO.puts("- #{&1}"))
-    end
-
-    unless result["forbidden_touches"] == [] do
-      IO.puts("forbidden touches:")
-      Enum.each(result["forbidden_touches"], &IO.puts("- #{&1}"))
-    end
-  end
-
-  defp print_fanout_pr(result, json: true), do: print_json(result)
-
-  defp print_fanout_pr(result, json: false) do
-    IO.puts("fanout PR #{result.assignment_id}")
-    IO.puts("state: #{result.state}")
-    IO.puts("url: #{result.pr["url"]}")
-
-    if result.ci_watch do
-      IO.puts("ci watch: #{result.ci_watch["watch_id"] || "-"}")
-    end
-  end
-
-  defp print_fanout_status(status, json: true), do: print_json(status)
-
-  defp print_fanout_status(status, json: false) do
-    IO.puts("fanout status #{status.run_id}")
-    IO.puts("path: #{status.run_path}")
-    IO.puts("")
-
-    rows =
-      Enum.map(status.assignments, fn assignment ->
-        [
-          assignment.assignment_id,
-          assignment.host || "-",
-          assignment.branch || "-",
-          assignment.orchestration_state || "-",
-          assignment.derived_state || "-",
-          assignment.completion_state || "-",
-          to_string(assignment.report_count || 0)
-        ]
-      end)
-
-    print_table(
-      ["assignment", "host", "branch", "orchestration", "derived", "completion", "reports"],
-      rows
-    )
-  end
-
   defp print_usage_modes(modes, json: true), do: print_json(%{modes: modes})
 
   defp print_usage_modes(modes, json: false) do
@@ -14800,38 +14491,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp fanout_usage do
-    "#{fanout_plan_usage()} | #{fanout_preflight_usage()} | #{fanout_launch_usage()} | #{fanout_monitor_usage()} | #{fanout_ownership_usage()} | #{fanout_pr_usage()} | #{fanout_status_usage()}"
-  end
-
-  defp fanout_plan_usage do
-    "jx fanout plan <plan-id> --baseline <sha> [--base-branch <branch>] [--coverage-file <path> --host-count <n> --risk-rules <json-or-path>] [--host <name[=base,worktree_root,validation_prefix]>] [--root <dir>] [--run-id <id>] [--json]"
-  end
-
-  defp fanout_preflight_usage do
-    "jx fanout preflight <run-id-or-path> [--root <dir>] [--ttl-seconds <n>] [--json]"
-  end
-
-  defp fanout_launch_usage do
-    "jx fanout launch <run-id-or-path> [assignment-id|--all] [--root <dir>] [--lease-timeout-seconds <n>] [--codex-bin <path>] [--tmux-server <name>] [--json]"
-  end
-
-  defp fanout_monitor_usage do
-    "jx fanout monitor <run-id-or-path> [--root <dir>] [--json]"
-  end
-
-  defp fanout_ownership_usage do
-    "jx fanout ownership <run-id-or-path> <assignment-id> [--root <dir>] [--warn-only] [--json]"
-  end
-
-  defp fanout_pr_usage do
-    "jx fanout pr <run-id-or-path> <assignment-id> [--root <dir>] [--repo <owner/repo>] [--register-ci-watch] [--ci-watch-mode notify|hold|prompt] [--allow-unvalidated] [--json]"
-  end
-
-  defp fanout_status_usage do
-    "jx fanout status <run-id-or-path> [--root <dir>] [--json]"
-  end
-
   defp devide_usage do
     [
       "jx devide workspaces",
@@ -14993,7 +14652,7 @@ defmodule JX.CLI do
       ],
       "devide" => devide_usage(),
       "events" => [events_usage()],
-      "fanout" => [fanout_usage()],
+      "fanout" => [FanoutCLI.usage()],
       "host" => HostCLI.usage_lines(:host),
       "hosts" => HostCLI.usage_lines(:hosts),
       "leases" => [
