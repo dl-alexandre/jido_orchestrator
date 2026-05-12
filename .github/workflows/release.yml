@@ -72,19 +72,21 @@ jobs:
 
       - name: Package release tarball
         run: |
+          package="jido_orchestrator"
           mkdir -p dist
-          tar czf "dist/jx-${{ github.ref_name }}.tar.gz" -C _build/prod/rel/jx .
+          tar czf "dist/${package}-${{ github.ref_name }}.tar.gz" -C _build/prod/rel/jx .
 
       - name: Package launcher bundle
         run: |
+          package="jido_orchestrator"
           version="${GITHUB_REF_NAME}"
           target="x86_64-unknown-linux-gnu"
-          bundle_name="jx-${version}-${target}"
+          bundle_name="${package}-${version}-${target}"
           bundle_dir="dist/bundle/${bundle_name}"
 
           mkdir -p "${bundle_dir}"
           cp crates/jx-launcher/target/release/jx-launcher "${bundle_dir}/jx"
-          cp "dist/jx-${version}.tar.gz" "${bundle_dir}/jx-release.tar.gz"
+          cp "dist/${package}-${version}.tar.gz" "${bundle_dir}/jx-release.tar.gz"
           printf '%s\n' "${version}" > "${bundle_dir}/version.txt"
           chmod +x "${bundle_dir}/jx"
 
@@ -93,7 +95,7 @@ jobs:
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: jx-release
+          name: jido_orchestrator-release
           path: dist/*.tar.gz
 
   release:
@@ -106,7 +108,7 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: jx-release
+          name: jido_orchestrator-release
           path: artifacts
 
       - name: Create Release

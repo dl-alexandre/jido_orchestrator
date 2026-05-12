@@ -1,7 +1,7 @@
 defmodule JX.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.0.1"
 
   def project do
     [

@@ -70,8 +70,8 @@ This is a standard Mix release that requires an Erlang/OTP runtime.
 ### 1. Tag a Release
 
 ```bash
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1
+git tag -a v0.0.1 -m "Release v0.0.1"
+git push origin v0.0.1
 ```
 
 ### 2. CI Builds Everything
@@ -81,7 +81,11 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`:
 1. Runs the full test suite (`mix test`)
 2. Builds the Hex package (`mix hex.build`)
 3. Builds the OTP release (`MIX_ENV=prod mix release`)
-4. Creates a GitHub Release with the release tarball
+4. Creates a GitHub Release with `jido_orchestrator-*` release assets
+
+The launcher bundle asset is named for the Hex package and contains the `jx`
+executable, `version.txt`, and the `jx-release.tar.gz` sidecar used by the
+launcher.
 
 ### 3. Publish Hex (Manual)
 
