@@ -16,6 +16,7 @@ defmodule JX.CLI do
   alias JX.CLI.Host, as: HostCLI
   alias JX.CLI.Leases, as: LeasesCLI
   alias JX.CLI.Monitor, as: MonitorCLI
+  alias JX.CLI.Orchestrate, as: OrchestrateCLI
   alias JX.CLI.Project, as: ProjectCLI
   alias JX.CLI.Queue, as: QueueCLI
   alias JX.CLI.Runners, as: RunnersCLI
@@ -26,10 +27,8 @@ defmodule JX.CLI do
   alias JX.CLI.Timeline, as: TimelineCLI
   alias JX.CLI.Tmux, as: TmuxCLI
   alias JX.Migrations
-  alias JX.MonitorEvents
   alias JX.NextStep
   alias JX.OrchestratorDaemon
-  alias JX.OrchestratorHeartbeats
   alias JX.ProcessInventory
   alias JX.RepoDoctor
   alias JX.Tmux
@@ -1812,94 +1811,7 @@ defmodule JX.CLI do
 
   defp dispatch(["orchestrator" | _args]), do: {:error, "usage: #{orchestrator_usage()}"}
 
-  defp dispatch(["orchestrate", command | args]) when command in ["step", "run", "start"] do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          consumer: :string,
-          host: :string,
-          managed: :boolean,
-          all_processes: :boolean,
-          type: :string,
-          ssh_target: :string,
-          work_state: :string,
-          control: :string,
-          prompt_status: :string,
-          observe: :boolean,
-          lines: :integer,
-          scan_limit: :integer,
-          queue_limit: :integer,
-          event_limit: :integer,
-          decision_limit: :integer,
-          min_observe_age_seconds: :integer,
-          interval_ms: :integer,
-          iterations: :integer,
-          execute: :boolean,
-          yes: :boolean,
-          ack: :boolean,
-          auto_plan: :boolean,
-          no_enter: :boolean,
-          json: :boolean
-        ]
-      )
-
-    lines = opts[:lines] || 40
-    scan_limit = opts[:scan_limit] || 100
-    queue_limit = opts[:queue_limit] || 5
-    event_limit = opts[:event_limit] || 50
-    decision_limit = opts[:decision_limit] || 20
-    min_observe_age_seconds = opts[:min_observe_age_seconds] || 30
-    interval_ms = opts[:interval_ms] || 30_000
-    iterations = opts[:iterations] || if(command == "step", do: 1, else: 0)
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrate_usage()),
-         :ok <- validate_optional_session_type(opts[:type]),
-         :ok <- validate_optional_work_state(opts[:work_state]),
-         :ok <- validate_optional_work_board_control(opts[:control]),
-         :ok <- validate_optional_prompt_status(opts[:prompt_status]),
-         :ok <- validate_positive("lines", lines),
-         :ok <- validate_positive("scan-limit", scan_limit),
-         :ok <- validate_positive("queue-limit", queue_limit),
-         :ok <- validate_positive("event-limit", event_limit),
-         :ok <- validate_positive("decision-limit", decision_limit),
-         :ok <- validate_non_negative("min-observe-age-seconds", min_observe_age_seconds),
-         :ok <- validate_positive("interval-ms", interval_ms),
-         :ok <- validate_non_negative("iterations", iterations),
-         :ok <- start_app() do
-      orchestrate_opts =
-        [
-          consumer: opts[:consumer],
-          host_name: opts[:host],
-          all_tmux: !opts[:managed],
-          all_processes: opts[:all_processes] || false,
-          type: opts[:type],
-          ssh_target: opts[:ssh_target],
-          work_state: opts[:work_state],
-          control_mode: opts[:control],
-          prompt_status: opts[:prompt_status],
-          observe: Keyword.get(opts, :observe, true),
-          lines: lines,
-          limit: scan_limit,
-          queue_limit: queue_limit,
-          event_limit: event_limit,
-          decision_limit: decision_limit,
-          min_observe_age_seconds: min_observe_age_seconds,
-          interval_ms: interval_ms,
-          execute: opts[:execute] || false,
-          yes: opts[:yes] || false,
-          auto_plan: opts[:auto_plan] || false,
-          enter: !opts[:no_enter]
-        ]
-        |> maybe_put(:ack, opts[:ack])
-
-      run_orchestrate(command, orchestrate_opts, iterations, interval_ms,
-        json: opts[:json] || false
-      )
-    end
-  end
-
-  defp dispatch(["orchestrate" | _args]), do: {:error, "usage: #{orchestrate_usage()}"}
+  defp dispatch(["orchestrate" | args]), do: OrchestrateCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["monitor" | args]), do: MonitorCLI.run(args, start_app: &start_app/0)
 
@@ -2923,10 +2835,6 @@ defmodule JX.CLI do
     "jx watch add <ref> --goal <text> (--success <pattern> | --blocker <pattern>) [--mode notify|hold|prompt] [--prompt <text>] [--json]"
   end
 
-  defp orchestrate_usage do
-    "jx orchestrate step|run|start [--consumer orchestrator] [--execute] [--yes] [--ack|--no-ack] [--auto-plan] [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--prompt-status none|draft|ready|sent|blocked] [--no-observe] [--lines 40] [--scan-limit 100] [--queue-limit 5] [--event-limit 50] [--decision-limit 20] [--min-observe-age-seconds 30] [--interval-ms 30000] [--iterations 0] [--no-enter] [--json]"
-  end
-
   defp ci_digest_usage do
     "jx ci digest <pr-number> --repo <owner/repo> [--no-logs] [--json]"
   end
@@ -3898,122 +3806,6 @@ defmodule JX.CLI do
     selected
     |> max(0)
     |> min(length(agenda) - 1)
-  end
-
-  defp run_orchestrate("step", opts, _iterations, _interval_ms, print_opts) do
-    with {:ok, report} <- Workspace.orchestrate(opts) do
-      print_orchestrate_report(report, print_opts)
-      :ok
-    end
-  end
-
-  defp run_orchestrate(command, opts, iterations, interval_ms, print_opts)
-       when command in ["run", "start"] do
-    orchestrate_loop(opts, iterations, interval_ms, print_opts, 1)
-  end
-
-  defp orchestrate_loop(_opts, iterations, _interval_ms, _print_opts, iteration)
-       when iterations > 0 and iteration > iterations,
-       do: :ok
-
-  defp orchestrate_loop(opts, 0, interval_ms, print_opts, iteration) do
-    case orchestrate_iteration(opts, print_opts, iteration) do
-      :ok ->
-        Process.sleep(interval_ms)
-        orchestrate_loop(opts, 0, interval_ms, print_opts, iteration + 1)
-
-      {:error, reason} ->
-        print_orchestrate_loop_error(reason, print_opts)
-        record_orchestrate_loop_error(opts, interval_ms, reason)
-        Process.sleep(interval_ms)
-        orchestrate_loop(opts, 0, interval_ms, print_opts, iteration + 1)
-    end
-  end
-
-  defp orchestrate_loop(opts, iterations, interval_ms, print_opts, iteration) do
-    with :ok <- orchestrate_iteration(opts, print_opts, iteration) do
-      if iterations == 0 or iteration < iterations do
-        Process.sleep(interval_ms)
-        orchestrate_loop(opts, iterations, interval_ms, print_opts, iteration + 1)
-      else
-        :ok
-      end
-    end
-  end
-
-  defp orchestrate_iteration(opts, print_opts, iteration) do
-    with {:ok, report} <- orchestrate_fun().(opts) do
-      IO.puts("orchestrate iteration #{iteration}")
-      print_orchestrate_report(report, print_opts)
-      :ok
-    end
-  rescue
-    error -> {:error, {:exception, error, __STACKTRACE__}}
-  catch
-    kind, reason -> {:error, {:caught, kind, reason, __STACKTRACE__}}
-  end
-
-  defp print_orchestrate_loop_error(reason, opts) do
-    error = orchestrate_loop_error_message(reason)
-
-    if opts[:json] do
-      print_json(%{generated_at: DateTime.utc_now() |> DateTime.to_iso8601(), error: error})
-    else
-      IO.puts(:stderr, "orchestrate iteration failed: #{error}")
-    end
-  end
-
-  defp record_orchestrate_loop_error(opts, interval_ms, reason) do
-    now = DateTime.utc_now()
-    error = orchestrate_loop_error_message(reason)
-
-    %{
-      daemon_key: Keyword.get(opts, :daemon_key) || orchestrate_consumer(opts),
-      consumer: orchestrate_consumer(opts),
-      session_name: Keyword.get(opts, :session_name) || "",
-      status: "error",
-      mode: orchestrate_loop_mode(opts),
-      last_scan_at: now,
-      last_decision_at: nil,
-      last_error: truncate(error, 500),
-      next_wake_at: DateTime.add(now, div(interval_ms, 1_000), :second),
-      scan_snapshot: Jason.encode!(%{error: error})
-    }
-    |> OrchestratorHeartbeats.upsert()
-
-    :ok
-  rescue
-    _error -> :ok
-  end
-
-  defp orchestrate_consumer(opts) do
-    Keyword.get(opts, :consumer) || MonitorEvents.default_consumer()
-  end
-
-  defp orchestrate_loop_mode(opts) do
-    execute? = Keyword.get(opts, :execute, false)
-    ack? = Keyword.get(opts, :ack, execute?)
-
-    case {execute?, ack?} do
-      {true, true} -> "execute+ack"
-      {true, false} -> "execute"
-      {false, true} -> "ack"
-      {false, false} -> "dry-run"
-    end
-  end
-
-  defp orchestrate_loop_error_message({:exception, error, stacktrace}) do
-    Exception.format(:error, error, stacktrace) |> String.trim()
-  end
-
-  defp orchestrate_loop_error_message({:caught, kind, reason, stacktrace}) do
-    Exception.format(kind, reason, stacktrace) |> String.trim()
-  end
-
-  defp orchestrate_loop_error_message(reason), do: format_error(reason)
-
-  defp orchestrate_fun do
-    Process.get(:jx_cli_orchestrate_fun, &Workspace.orchestrate/1)
   end
 
   defp print_repo_doctor_report(report, json: true), do: print_json(%{repo_doctor: report})
@@ -7349,107 +7141,6 @@ defmodule JX.CLI do
     print_table(["HOST", "TRANSPORT", "SUBSYSTEM", "ERROR"], rows)
   end
 
-  defp print_orchestrate_report(report, opts) do
-    if opts[:json] do
-      print_json(json_orchestrate_report(report))
-    else
-      IO.puts("generated #{format_time(report.generated_at)}")
-      IO.puts("consumer #{report.consumer}")
-      IO.puts("mode #{report.mode}")
-      IO.puts("")
-
-      print_summary_counts("scan", %{
-        sessions: report.scan.sessions_total,
-        events_saved: report.scan.events_saved,
-        queues: report.scan.queues_total,
-        watches: Map.get(report.scan, :watches_total, 0),
-        watch_actions: Map.get(report.scan, :watch_actions_total, 0),
-        ci_watches: Map.get(report.scan, :ci_watches_total, 0),
-        delegations: Map.get(report.scan, :delegations_total, 0),
-        delegation_reviews: Map.get(report.scan, :delegation_reviews_total, 0),
-        delegation_long_running:
-          get_in(report.scan, [:delegation_timing, :active, :long_running]) || 0,
-        delegation_conflicts: get_in(report.scan, [:delegation_preflight, :conflicts_total]) || 0,
-        notifications: Map.get(report.scan, :notifications_saved, 0),
-        profiles: report.scan.profiles_total
-      })
-
-      IO.puts("")
-
-      print_summary_counts("inbox", %{
-        unread: report.inbox.unread_total,
-        matching_unread: report.inbox.matching_unread_total,
-        returned: report.inbox.returned,
-        latest_event: report.inbox.latest_event_id
-      })
-
-      IO.puts("")
-      print_orchestrator_decisions(report.decisions)
-      IO.puts("")
-      print_operation_execution(report.execution)
-
-      if report.cursor do
-        IO.puts("")
-        print_monitor_cursor(report.cursor)
-      end
-
-      unless report.errors == [] do
-        IO.puts("")
-        print_summary_errors(report.errors)
-      end
-    end
-  end
-
-  defp print_orchestrator_decisions([]), do: IO.puts("decisions: none")
-
-  defp print_orchestrator_decisions(decisions) do
-    rows =
-      Enum.map(decisions, fn decision ->
-        [
-          decision.id,
-          decision.status,
-          decision.safety,
-          decision.action,
-          decision.ref,
-          Map.get(decision, :state, ""),
-          Map.get(decision, :prompt_status, ""),
-          decision |> Map.get(:event_ids, []) |> Enum.join(",") |> truncate(32),
-          truncate(decision.reason, 88),
-          truncate(Map.get(decision, :message, ""), 72)
-        ]
-      end)
-
-    IO.puts("decisions")
-
-    print_table(
-      [
-        "ID",
-        "STATUS",
-        "SAFETY",
-        "ACTION",
-        "REF",
-        "STATE",
-        "PROMPT",
-        "EVENTS",
-        "REASON",
-        "MESSAGE"
-      ],
-      rows
-    )
-  end
-
-  defp print_monitor_cursor(cursor) do
-    rows = [
-      ["consumer", Map.get(cursor, :consumer, "-")],
-      ["source", Map.get(cursor, :source, "-")],
-      ["last_event_id", Integer.to_string(Map.get(cursor, :last_event_id, 0))],
-      ["last_seen_at", format_time(Map.get(cursor, :last_seen_at))],
-      ["updated_at", format_time(Map.get(cursor, :updated_at))]
-    ]
-
-    print_table(["CURSOR", "VALUE"], rows)
-  end
-
   defp print_operator_profile(profile, opts) do
     if opts[:json] do
       print_json(%{operator: profile})
@@ -7621,85 +7312,6 @@ defmodule JX.CLI do
     }
   end
 
-  defp json_monitor_scan(scan) do
-    %{
-      generated_at: format_time(scan.generated_at),
-      observed: scan.observed,
-      observation_refresh: scan.observation_refresh,
-      sessions_total: scan.sessions_total,
-      events_saved: scan.events_saved,
-      events: Enum.map(scan.events, &json_monitor_event/1),
-      queues_total: scan.queues_total,
-      queues: scan.queues,
-      watches_total: Map.get(scan, :watches_total, 0),
-      watch_updates:
-        scan
-        |> Map.get(:watch_updates, [])
-        |> Enum.map(&json_watch_update/1),
-      watch_actions_total: Map.get(scan, :watch_actions_total, 0),
-      watch_actions:
-        scan
-        |> Map.get(:watch_actions, [])
-        |> Enum.map(&json_watch_action/1),
-      ci_watches_total: Map.get(scan, :ci_watches_total, 0),
-      ci_watch_updates:
-        scan
-        |> Map.get(:ci_watch_updates, [])
-        |> Enum.map(&json_ci_watch_update/1),
-      wake_triggers_total: Map.get(scan, :wake_triggers_total, 0),
-      wake_notifications_saved: Map.get(scan, :wake_notifications_saved, 0),
-      wake_triggers:
-        scan
-        |> Map.get(:wake_triggers, [])
-        |> Enum.map(&json_wake_trigger_run/1),
-      call_handoffs_total: Map.get(scan, :call_handoffs_total, 0),
-      call_handoffs:
-        scan
-        |> Map.get(:call_handoffs, [])
-        |> Enum.map(&json_call_handoff/1),
-      delegations_total: Map.get(scan, :delegations_total, 0),
-      delegations:
-        scan
-        |> Map.get(:delegations, [])
-        |> Enum.map(&json_delegation/1),
-      delegation_reviews_total: Map.get(scan, :delegation_reviews_total, 0),
-      delegation_reviews: Map.get(scan, :delegation_reviews, []),
-      delegation_preflight: Map.get(scan, :delegation_preflight, %{}),
-      delegation_timing: Map.get(scan, :delegation_timing, %{}),
-      notifications_saved: Map.get(scan, :notifications_saved, 0),
-      notifications:
-        scan
-        |> Map.get(:notifications, [])
-        |> Enum.map(&json_notification/1),
-      profiles_total: scan.profiles_total,
-      profiles: scan.profiles,
-      errors: Enum.map(scan.errors, &json_error/1)
-    }
-  end
-
-  defp json_orchestrate_report(report) do
-    %{
-      generated_at: format_time(report.generated_at),
-      consumer: report.consumer,
-      mode: report.mode,
-      scan: json_monitor_scan(report.scan),
-      inbox: %{
-        cursor: json_monitor_cursor(report.inbox.cursor),
-        latest_event_id: report.inbox.latest_event_id,
-        unread_total: report.inbox.unread_total,
-        matching_unread_total: report.inbox.matching_unread_total,
-        returned: report.inbox.returned,
-        events: Enum.map(report.inbox.events, &json_monitor_event/1)
-      },
-      decisions: report.decisions,
-      action_queue: Map.get(report, :action_queue),
-      execution: report.execution,
-      heartbeat: Map.get(report, :heartbeat),
-      cursor: maybe_json_monitor_cursor(report.cursor),
-      errors: Enum.map(report.errors, &json_error/1)
-    }
-  end
-
   defp json_monitor_event(event) do
     %{
       id: event.id,
@@ -7719,19 +7331,6 @@ defmodule JX.CLI do
       inserted_at: format_time(event.inserted_at)
     }
   end
-
-  defp json_monitor_cursor(cursor) do
-    %{
-      consumer: Map.get(cursor, :consumer),
-      source: Map.get(cursor, :source),
-      last_event_id: Map.get(cursor, :last_event_id, 0),
-      last_seen_at: format_time(Map.get(cursor, :last_seen_at)),
-      updated_at: format_time(Map.get(cursor, :updated_at))
-    }
-  end
-
-  defp maybe_json_monitor_cursor(nil), do: nil
-  defp maybe_json_monitor_cursor(cursor), do: json_monitor_cursor(cursor)
 
   defp json_operation_execution(execution) do
     %{
@@ -8006,31 +7605,6 @@ defmodule JX.CLI do
       trigger: json_wake_trigger(run.trigger),
       wake: maybe_json_wake_result(run.wake),
       errors: Enum.map(Map.get(run, :errors, []), &json_error/1)
-    }
-  end
-
-  defp json_watch_update(update) do
-    %{
-      watch: json_session_watch(update.watch),
-      previous_status: update.previous_status,
-      status: update.status,
-      changed: update.changed?,
-      profile_action: maybe_json_watch_action(Map.get(update, :profile_action)),
-      summary: update.summary,
-      ref: update.watch.ref
-    }
-  end
-
-  defp json_ci_watch_update(update) do
-    %{
-      watch: json_ci_watch(update.watch),
-      previous_status: update.previous_status,
-      status: update.status,
-      changed: update.changed?,
-      profile_action: maybe_json_watch_action(Map.get(update, :profile_action)),
-      summary: update.summary,
-      ref: update.watch.ref,
-      digest: update.digest
     }
   end
 
@@ -8454,14 +8028,17 @@ defmodule JX.CLI do
       "leases" => LeasesCLI.usage_lines(),
       "meet" => [meet_usage()],
       "modes" => [modes_usage()],
-      "monitor" => MonitorCLI.usage_lines() ++ [orchestrate_usage(), orchestrator_usage()],
+      "monitor" =>
+        MonitorCLI.usage_lines() ++ OrchestrateCLI.usage_lines() ++ [orchestrator_usage()],
       "next" => [next_usage()],
       "notifications" => [
         "jx notifications ls [--status unread|acknowledged|dismissed] [--severity info|notice|warning|critical] [--ref <ref>] [--project <name>] [-n 50] [--json]",
         "jx notifications ack <notification-id>|--all [--ref <ref>] [--project <name>] [--json]",
         "jx notifications compact [--ref <ref>] [--project <name>] [--json]"
       ],
-      "orchestrator" => [orchestrator_usage(), orchestrate_usage()] ++ MonitorCLI.usage_lines(),
+      "orchestrator" =>
+        [orchestrator_usage()] ++
+          OrchestrateCLI.usage_lines() ++ MonitorCLI.usage_lines(),
       "policy" => [
         "jx policy overview [--json]",
         "jx policy check <action> [--json]",
