@@ -1,26 +1,24 @@
 # jido_orchestrator
 
-`jido_orchestrator` is the Hex package for `jx`, a terminal control plane for
-durable agent coding sessions.
+`jido_orchestrator` is the Hex package for `jx`: a terminal control plane for
+durable agent orchestration.
 
-`jx` coordinates work that is already happening across tmux panes, SSH sessions,
-local repositories, CI watches, approvals, and long-running agent processes. It
-is not a replacement for Codex, Claude, or opencode. It is the layer that helps
-an operator or foreground agent keep many concurrent coding sessions observable,
-recoverable, and policy-gated.
+`jx` keeps agent work visible and recoverable when it spans tmux panes, SSH
+sessions, local repositories, CI runs, approvals, and long-running foreground or
+background agents. It does not replace Codex, Claude, or opencode. It gives an
+operator or lead agent a durable record of what exists, what changed, what is
+blocked, and which actions are safe to take next.
 
-## Install
-
-Install from Hex:
+## Install From Hex
 
 ```bash
 mix escript.install hex jido_orchestrator
 ```
 
-This installs the `jx` executable:
+That installs the `jx` executable:
 
 ```bash
-jx status
+jx --help
 ```
 
 GitHub release bundles are also available at:
@@ -29,9 +27,23 @@ GitHub release bundles are also available at:
 https://github.com/dl-alexandre/jido_orchestrator/releases
 ```
 
-## What It Manages
+## Why Use It
 
-`jx` persists the operational state around agent work:
+Agent work gets hard to operate when the useful state is spread across terminal
+scrollback, remote panes, local branches, CI pages, and chat messages. `jx`
+turns that state into durable records and command surfaces.
+
+Use `jx` when you need to:
+
+- keep many agent sessions observable without manually polling every pane
+- launch or resume bounded work against registered projects
+- track session profiles, queues, watches, handoffs, and CI state
+- require explicit approval before risky or public actions
+- preserve audit evidence for what an orchestrator saw and decided
+
+## What It Stores
+
+`jx` persists the operational state around agent execution:
 
 - hosts, projects, tasks, and worktrees
 - tmux session metadata and terminal observations
@@ -40,13 +52,13 @@ https://github.com/dl-alexandre/jido_orchestrator/releases
 - approval records, safe actions, leases, assignments, and timelines
 - orchestrator heartbeats and audit evidence
 
-The durable record is the point. A session can move, block, finish, or need a
-new prompt, and `jx` can still compare the latest observation against the saved
-objective and decide what is safe to do next.
+The durable record is the point. A session can move, block, finish, or need new
+input, and `jx` can still compare the latest observation against the saved
+objective before deciding what to surface or execute.
 
 ## Quick Start
 
-Register a local workspace and check host readiness:
+Initialize local state and register a host:
 
 ```bash
 jx init
@@ -54,7 +66,7 @@ jx host add local --local --workspace /tmp/jx
 jx host doctor local --agent codex
 ```
 
-Register a project and assign work:
+Register a project and assign bounded work:
 
 ```bash
 jx project add my-app --host local --repo /path/to/my-app
@@ -69,7 +81,7 @@ jx sessions queues --json
 jx project brief my-app --json
 ```
 
-Run the background orchestrator in dry-run mode:
+Run the orchestrator in dry-run mode before allowing it to act:
 
 ```bash
 jx orchestrator start --dry-run --replace
@@ -77,7 +89,7 @@ jx orchestrator health --json
 jx orchestrator heartbeats --json
 ```
 
-## Common Surfaces
+## Core Commands
 
 - `jx tui` gives a compact terminal dashboard for the current work board.
 - `jx sessions` discovers tmux, SSH, and process-backed sessions.
@@ -89,7 +101,7 @@ jx orchestrator heartbeats --json
 - `jx actions` and `jx approvals` expose policy-gated execution.
 - `jx timeline <scope> <id>` reconstructs audit history from durable events.
 
-## Documentation
+## HexDocs
 
 HexDocs are configured through ExDoc and are the canonical long-form reference:
 
@@ -97,8 +109,10 @@ HexDocs are configured through ExDoc and are the canonical long-form reference:
 https://hexdocs.pm/jido_orchestrator
 ```
 
-The source pages live in `docs/hexdocs/` and are grouped from `mix.exs`.
-Generate them locally with:
+The published docs use `docs/hexdocs/overview.md` as the main page. The source
+pages live under `docs/hexdocs/` and are grouped from `mix.exs`.
+
+Generate the docs locally with:
 
 ```bash
 mix deps.get
@@ -126,6 +140,14 @@ The local and SSH adapters expect standard command-line tools:
 
 By default, `jx` stores local state under `~/.jx`. Override the database with
 `--db path/to/jx.db` or `JX_DB=path/to/jx.db`.
+
+## Naming Contract
+
+- Hex package: `jido_orchestrator`
+- Installed executable: `jx`
+- OTP app: `:jx`
+- Elixir modules: `JX.*`
+- GitHub repository: `dl-alexandre/jido_orchestrator`
 
 ## Development
 
@@ -155,6 +177,3 @@ Build the Rust launcher:
 cargo fmt --manifest-path crates/jx-launcher/Cargo.toml -- --check
 cargo build --manifest-path crates/jx-launcher/Cargo.toml --release --locked
 ```
-
-The OTP app and module namespace remain `:jx` and `JX.*`. The Hex package and
-repository are named `jido_orchestrator`; the installed command is `jx`.

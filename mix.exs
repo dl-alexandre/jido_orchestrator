@@ -56,6 +56,8 @@ defmodule JX.MixProject do
   defp docs do
     [
       main: "overview",
+      homepage_url: "https://hexdocs.pm/jido_orchestrator",
+      source_url: "https://github.com/dl-alexandre/jido_orchestrator",
       source_ref: "v#{@version}",
       extras: [
         "docs/hexdocs/overview.md",
@@ -183,12 +185,14 @@ defmodule JX.MixProject do
         ".formatter.exs",
         "mix.exs",
         "README.md",
+        "CHANGELOG.md",
         "LICENSE"
       ],
       licenses: ["Apache-2.0"],
       links: %{
         "GitHub" => "https://github.com/dl-alexandre/jido_orchestrator",
-        "Changelog" => "https://github.com/dl-alexandre/jido_orchestrator/blob/main/CHANGELOG.md"
+        "Changelog" =>
+          "https://github.com/dl-alexandre/jido_orchestrator/blob/master/CHANGELOG.md"
       }
     ]
   end
