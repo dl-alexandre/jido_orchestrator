@@ -1,3 +1,4 @@
+use flate2::read::GzDecoder;
 use std::env;
 use std::fs::{self, File};
 use std::io;
@@ -5,7 +6,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
-use flate2::read::GzDecoder;
 use tar::Archive;
 
 fn main() {
@@ -25,11 +25,12 @@ fn run() -> io::Result<()> {
 
     // 2. Read version.txt
     let version_path = launcher_dir.join("version.txt");
-    let version = fs::read_to_string(&version_path)?
-        .trim()
-        .to_string();
+    let version = fs::read_to_string(&version_path)?.trim().to_string();
     if version.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "version.txt is empty"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "version.txt is empty",
+        ));
     }
 
     // 3. Determine target triple at compile time
@@ -118,7 +119,10 @@ fn extract_tarball(tarball: &Path, dest: &Path) -> io::Result<()> {
         // Validate entry path to prevent path traversal
         let path = entry.path()?;
         let cleaned = path.components().collect::<PathBuf>();
-        if cleaned.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if cleaned
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("tar entry contains path traversal: {}", path.display()),

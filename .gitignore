@@ -18,12 +18,14 @@
 
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
+.DS_Store
 
 # Also ignore archive artifacts (built via `mix archive.build`).
 *.ez
 
 # Ignore package tarballs (built via `mix hex.build`).
-jido_ide-*.tar
+jido_orchestrator-*/
+jido_orchestrator-*.tar
 jx-*.tar
 
 # Escript binary built by `mix escript.build`.

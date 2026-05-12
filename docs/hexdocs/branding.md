@@ -4,6 +4,7 @@ The public identity is:
 
 - CLI: `jx`
 - product: `jx`
+- Hex package: `jido_orchestrator`
 - tagline: durable agent orchestration from the terminal
 
 The implementation uses:
@@ -22,7 +23,8 @@ operations for sessions, watches, queues, handoffs, and policy-gated actions.
 
 Current state:
 
-- HexDocs use jx as the public name.
+- Hex package distribution uses `jido_orchestrator`; documentation and CLI
+  examples use `jx` as the public name.
 - `bin/jx` is the local wrapper.
 - `mix escript.build` emits `jx`.
 - `JX.*` is the stable module namespace.

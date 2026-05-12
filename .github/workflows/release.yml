@@ -20,6 +20,10 @@ jobs:
           elixir-version: "1.19"
           otp-version: "27"
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
       - name: Cache Mix deps
         uses: actions/cache@v4
         with:
@@ -28,14 +32,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mix-
 
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/jx-launcher/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/jx-launcher/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Fetch dependencies
         run: mix deps.get
 
       - name: Check formatting
         run: mix format --check-formatted
 
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path crates/jx-launcher/Cargo.toml -- --check
+
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
+
+      - name: Build Rust launcher
+        run: cargo build --manifest-path crates/jx-launcher/Cargo.toml --release --locked
 
       - name: Run tests
         run: mix test
@@ -54,7 +75,22 @@ jobs:
           mkdir -p dist
           tar czf "dist/jx-${{ github.ref_name }}.tar.gz" -C _build/prod/rel/jx .
 
-      - name: Upload release tarball
+      - name: Package launcher bundle
+        run: |
+          version="${GITHUB_REF_NAME}"
+          target="x86_64-unknown-linux-gnu"
+          bundle_name="jx-${version}-${target}"
+          bundle_dir="dist/bundle/${bundle_name}"
+
+          mkdir -p "${bundle_dir}"
+          cp crates/jx-launcher/target/release/jx-launcher "${bundle_dir}/jx"
+          cp "dist/jx-${version}.tar.gz" "${bundle_dir}/jx-release.tar.gz"
+          printf '%s\n' "${version}" > "${bundle_dir}/version.txt"
+          chmod +x "${bundle_dir}/jx"
+
+          tar czf "dist/${bundle_name}.tar.gz" -C dist/bundle "${bundle_name}"
+
+      - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
           name: jx-release
@@ -67,7 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download release tarball
+      - name: Download release assets
         uses: actions/download-artifact@v4
         with:
           name: jx-release

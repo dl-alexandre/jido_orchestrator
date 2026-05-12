@@ -1,7 +1,7 @@
 defmodule JX.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
 
   def project do
     [
@@ -173,6 +173,7 @@ defmodule JX.MixProject do
 
   defp package do
     [
+      name: "jido_orchestrator",
       files: [
         "bin",
         "config",

@@ -4,8 +4,11 @@ jx is published through two channels:
 
 | Channel | Audience | Command |
 |---|---|---|
-| **Hex** | Elixir/OTP developers | `mix escript.install hex jx` |
+| **Hex** | Elixir/OTP developers | `mix escript.install hex jido_orchestrator` |
 | **GitHub Releases** | OTP release tarball | Download from release page |
+
+The Hex package is published as `jido_orchestrator`. It installs the `jx`
+executable and keeps the OTP app name as `:jx`.
 
 ## Build Docs Locally
 

@@ -1,6 +1,21 @@
 # Installation
 
-jx is currently developed as an Elixir escript and local wrapper.
+jx is distributed on Hex as `jido_orchestrator`. The package installs the `jx`
+executable.
+
+## Hex
+
+Install the escript:
+
+```bash
+mix escript.install hex jido_orchestrator
+```
+
+Then run:
+
+```bash
+jx status
+```
 
 ## Local Development
 

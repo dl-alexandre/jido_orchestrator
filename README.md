@@ -1,4 +1,4 @@
-# jx
+# jido_orchestrator
 
 Durable agent orchestration from the terminal. `jx` is an agent-facing CLI and
 TUI for orchestrating SSH/tmux-backed work sessions.
@@ -6,6 +6,16 @@ TUI for orchestrating SSH/tmux-backed work sessions.
 `jx` is its own orchestration implementation. It is not part of `CLI-Tools`;
 external repositories such as `example-project` are target workspaces managed by
 `jx`, not the implementation boundary for `jx`.
+
+## Installation
+
+Install from Hex:
+
+```bash
+mix escript.install hex jido_orchestrator
+```
+
+This installs the `jx` executable.
 
 The durability unit is:
 
