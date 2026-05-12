@@ -46,6 +46,9 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
+      - name: Audit Hex dependencies
+        run: mix hex.audit
+
       - name: Check formatting
         run: mix format --check-formatted
 

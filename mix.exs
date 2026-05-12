@@ -234,7 +234,7 @@ defmodule JX.MixProject do
       "jx.contract": [
         "test test/jx/dev_ide/contract_test.exs test/jx/safe_actions/registry_contract_test.exs"
       ],
-      precommit: ["compile --warnings-as-errors", "format", "test"]
+      precommit: ["compile --warnings-as-errors", "format --check-formatted", "test"]
     ]
   end
 end

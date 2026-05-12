@@ -1507,12 +1507,14 @@ defmodule JX.Workspace do
     limit = Keyword.get(opts, :limit, 50)
     ref = Keyword.get(opts, :ref)
     project = Keyword.get(opts, :project)
+    registered_projects = project && Projects.list_projects_by_name(project)
     control_mode = Keyword.get(opts, :control_mode)
     next_action = Keyword.get(opts, :next_action)
 
     with {:ok, {report, observation_refresh}} <- summary_current_report(opts) do
       items =
         report.sessions
+        |> filter_sessions_project_hint(project, registered_projects)
         |> build_work_board_items(control_mode)
         |> filter_work_board_ref(ref)
 
@@ -1523,7 +1525,7 @@ defmodule JX.Workspace do
       dossiers =
         items
         |> SessionDossiers.build(changes, directives)
-        |> filter_dossier_project(project)
+        |> filter_dossier_project(project, registered_projects)
         |> filter_dossier_next_action(next_action)
         |> Enum.take(limit)
 
@@ -3333,13 +3335,30 @@ defmodule JX.Workspace do
     Enum.filter(dossiers, &(get_in(&1, [:next_action, :action]) == next_action))
   end
 
-  defp filter_dossier_project(dossiers, nil), do: dossiers
-  defp filter_dossier_project(dossiers, ""), do: dossiers
+  defp filter_dossier_project(dossiers, nil, _registered_projects), do: dossiers
+  defp filter_dossier_project(dossiers, "", _registered_projects), do: dossiers
 
-  defp filter_dossier_project(dossiers, project) do
-    registered_projects = Projects.list_projects_by_name(project)
-
+  defp filter_dossier_project(dossiers, project, registered_projects) do
     Enum.filter(dossiers, &ProjectMatcher.matches_dossier?(&1, project, registered_projects))
+  end
+
+  defp filter_sessions_project_hint(sessions, nil, _registered_projects), do: sessions
+  defp filter_sessions_project_hint(sessions, "", _registered_projects), do: sessions
+
+  defp filter_sessions_project_hint(sessions, project, registered_projects) do
+    Enum.filter(sessions, fn session ->
+      explicit =
+        first_present([
+          Map.get(session, :control_project),
+          Map.get(session, :project)
+        ])
+
+      explicit == project or
+        ProjectMatcher.path_matches_project?(
+          [Map.get(session, :current_path)],
+          registered_projects || []
+        )
+    end)
   end
 
   defp filter_projects_by_host(projects, nil), do: projects
