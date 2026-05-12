@@ -5,6 +5,7 @@ defmodule JX.CLI do
 
   alias JX.AgentRunner
   alias JX.CiDigest
+  alias JX.CLI.Actions, as: ActionsCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
   alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
@@ -3067,46 +3068,7 @@ defmodule JX.CLI do
      "usage: jx operations ls [--ref <ref>] [--action <action>] [--status executed|skipped|error] [-n 20] [--json]"}
   end
 
-  defp dispatch(["actions", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          ref: :string,
-          action: :string,
-          source: :string,
-          status: :string,
-          outcome: :string,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 50
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx actions ls [--source <source>] [--ref <ref>] [--action <action>] [--status planned|queued|executed|skipped|error|cancelled] [--outcome helpful|ignored|blocked|superseded|failed] [-n 50] [--json]"
-           ),
-         :ok <- validate_optional_action_status(opts[:status]),
-         :ok <- validate_optional_action_outcome(opts[:outcome]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_orchestration_actions(
-        source: opts[:source],
-        ref: opts[:ref],
-        action: opts[:action],
-        status: opts[:status],
-        outcome: opts[:outcome],
-        limit: limit
-      )
-      |> print_orchestration_actions(json: opts[:json] || false)
-
-      :ok
-    end
-  end
+  defp dispatch(["actions" | args]), do: ActionsCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["runners", "register", runner_id | args]) do
     {opts, rest, invalid} =
@@ -3900,94 +3862,6 @@ defmodule JX.CLI do
     do:
       {:error,
        "usage: jx timeline workspace|approval|action|assignment|agent|runner|session <id> [-n 100] [--json]"}
-
-  defp dispatch(["actions", "show", action_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx actions show <action-id> [--json]"),
-         :ok <- start_app(),
-         {:ok, result} <- Workspace.show_action(action_id) do
-      print_safe_action_show(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["actions", "history", approval_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx actions history <approval-id> [--json]"),
-         :ok <- start_app(),
-         {:ok, result} <- Workspace.action_history(approval_id) do
-      print_safe_action_history(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["actions", "propose", approval_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [kind: :string, action: :string, owner: :string, json: :boolean]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx actions propose <approval-id> [--kind rerun_devide_command|acknowledge_approval] [--owner <owner>] [--json]"
-           ),
-         {:ok, kind} <- safe_action_kind(opts),
-         :ok <- start_app(),
-         {:ok, result} <- Workspace.propose_action(approval_id, kind: kind, owner: opts[:owner]) do
-      print_safe_action_result("proposed", result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["actions", "dry-run", action_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [owner: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx actions dry-run <action-id> [--owner <owner>] [--json]"),
-         :ok <- start_app(),
-         {:ok, result} <- Workspace.dry_run_action(action_id, owner: opts[:owner]) do
-      print_safe_action_result("dry run", result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["actions", "execute", action_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [confirm: :boolean, owner: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx actions execute <action-id> --confirm [--owner <owner>] [--json]"
-           ),
-         :ok <- start_app() do
-      if opts[:confirm] do
-        with {:ok, result} <-
-               Workspace.execute_action(action_id, confirm: true, owner: opts[:owner]) do
-          print_safe_action_result("executed", result, json: opts[:json] || false)
-          :ok
-        end
-      else
-        with {:ok, result} <- Workspace.dry_run_action(action_id, owner: opts[:owner]) do
-          print_safe_action_result("dry run", result, json: opts[:json] || false)
-          _ = Workspace.execute_action(action_id, confirm: false)
-          {:error, "confirmation required; pass --confirm to execute this action"}
-        end
-      end
-    end
-  end
-
-  defp dispatch(["actions" | _args]) do
-    {:error,
-     "usage: jx actions ls [--source <source>] [--ref <ref>] [--action <action>] [--status planned|queued|executed|skipped|error|cancelled] [--outcome helpful|ignored|blocked|superseded|failed] [-n 50] [--json] | jx actions show <action-id> [--json] | jx actions history <approval-id> [--json] | jx actions propose <approval-id> [--kind rerun_devide_command|acknowledge_approval] [--owner <owner>] [--json] | jx actions dry-run <action-id> [--owner <owner>] [--json] | jx actions execute <action-id> --confirm [--owner <owner>] [--json]"}
-  end
 
   defp dispatch(["approvals", "ls" | args]) do
     {opts, rest, invalid} =
@@ -6731,62 +6605,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp validate_optional_action_status(nil), do: :ok
-
-  defp validate_optional_action_status(status) do
-    statuses = JX.OrchestrationActions.statuses()
-
-    if status in statuses do
-      :ok
-    else
-      {:error,
-       "unsupported action status #{inspect(status)}; expected one of: #{Enum.join(statuses, ", ")}"}
-    end
-  end
-
-  defp validate_optional_action_outcome(nil), do: :ok
-
-  defp validate_optional_action_outcome(outcome) do
-    outcomes = JX.OrchestrationActions.outcomes()
-
-    if outcome in outcomes do
-      :ok
-    else
-      {:error,
-       "unsupported action outcome #{inspect(outcome)}; expected one of: #{Enum.join(outcomes, ", ")}"}
-    end
-  end
-
-  defp safe_action_kind(opts) do
-    kind = opts[:kind]
-    action = opts[:action]
-
-    cond do
-      text_present?(kind) and text_present?(action) and kind != action ->
-        {:error, "--kind and --action must match when both are provided"}
-
-      text_present?(kind) ->
-        validate_safe_action_kind(kind)
-
-      text_present?(action) ->
-        validate_safe_action_kind(action)
-
-      true ->
-        {:ok, "rerun_devide_command"}
-    end
-  end
-
-  defp validate_safe_action_kind(kind) do
-    kinds = JX.SafeActions.Action.kinds()
-
-    if kind in kinds do
-      {:ok, kind}
-    else
-      {:error,
-       "unsupported safe action #{inspect(kind)}; expected one of: #{Enum.join(kinds, ", ")}"}
-    end
-  end
-
   defp validate_optional_notification_status(nil), do: :ok
 
   defp validate_optional_notification_status(status) do
@@ -8050,246 +7868,6 @@ defmodule JX.CLI do
       )
     end
   end
-
-  defp print_orchestration_actions([], opts) do
-    if opts[:json] do
-      print_json(%{actions: []})
-    else
-      IO.puts("no orchestration actions")
-    end
-  end
-
-  defp print_orchestration_actions(actions, opts) do
-    if opts[:json] do
-      print_json(%{actions: Enum.map(actions, &json_orchestration_action/1)})
-    else
-      rows =
-        Enum.map(actions, fn action ->
-          [
-            action.action_id,
-            action.status,
-            action.source,
-            action.action,
-            action.safety,
-            action.ref,
-            action.outcome,
-            truncate(action.reason, 48),
-            truncate(action.result_summary, 72),
-            format_time(action.updated_at)
-          ]
-        end)
-
-      print_table(
-        [
-          "ACTION_ID",
-          "STATUS",
-          "SOURCE",
-          "ACTION",
-          "SAFETY",
-          "REF",
-          "OUTCOME",
-          "REASON",
-          "RESULT",
-          "AT"
-        ],
-        rows
-      )
-    end
-  end
-
-  defp print_safe_action_result(label, result, opts) do
-    if opts[:json] do
-      print_json(json_safe_action_result(result))
-    else
-      action = result.action
-      safe_action = result.safe_action
-
-      IO.puts("#{label} #{action.action_id}")
-      IO.puts("kind: #{safe_action.kind}")
-      IO.puts("approval: #{safe_action.approval_id}")
-      IO.puts("workspace: #{safe_action.workspace_id}")
-      print_safe_action_field("command", safe_action.command_id)
-      print_safe_action_field("db_isolation", safe_action.db_isolation)
-      IO.puts("would do: #{result.would_do}")
-      print_safe_action_execution(result)
-      print_safe_action_result_next(label, result)
-    end
-  end
-
-  defp print_safe_action_result_next("proposed", %{action: action, safe_action: safe_action}) do
-    IO.puts("next: jx actions dry-run #{action.action_id}")
-    IO.puts("execute: jx actions execute #{action.action_id} --confirm")
-    IO.puts("audit: jx actions history #{safe_action.approval_id}")
-  end
-
-  defp print_safe_action_result_next("dry run", %{action: action, safe_action: safe_action}) do
-    IO.puts("next: jx actions execute #{action.action_id} --confirm")
-    IO.puts("audit: jx actions history #{safe_action.approval_id}")
-  end
-
-  defp print_safe_action_result_next("executed", %{action: action, safe_action: safe_action}) do
-    IO.puts("next: jx actions show #{action.action_id}")
-    IO.puts("audit: jx actions history #{safe_action.approval_id}")
-  end
-
-  defp print_safe_action_result_next(_label, _result), do: :ok
-
-  defp print_safe_action_field(_label, value) when value in [nil, ""], do: :ok
-  defp print_safe_action_field(label, value), do: IO.puts("#{label}: #{value}")
-
-  defp print_safe_action_execution(%{executed: true, run: run}) when is_map(run) do
-    IO.puts("execution: executed")
-    IO.puts("run: #{Map.get(run, "id") || Map.get(run, :id) || "-"}")
-    IO.puts("status: #{Map.get(run, "status") || Map.get(run, :status) || "-"}")
-  end
-
-  defp print_safe_action_execution(%{executed: true, approval: approval}) do
-    IO.puts("execution: executed")
-    IO.puts("approval_status: #{approval.status}")
-  end
-
-  defp print_safe_action_execution(_result) do
-    IO.puts("execution: requires --confirm")
-  end
-
-  defp print_safe_action_show(%{action: action, payload: payload, events: events} = result, opts) do
-    if opts[:json] do
-      print_json(%{
-        action: json_orchestration_action(action),
-        payload: payload,
-        events: Enum.map(events, &json_safe_action_event/1),
-        guidance: Map.get(result, :guidance)
-      })
-    else
-      IO.puts("action #{action.action_id}")
-      IO.puts("kind: #{action.action}")
-      IO.puts("status: #{action.status}")
-      IO.puts("outcome: #{blank_to_dash(action.outcome)}")
-      IO.puts("correlation_id: #{safe_action_correlation_id(action, payload, events)}")
-      IO.puts("approval: #{action.ref}")
-      IO.puts("approval_detail: jx approvals show #{action.ref}")
-      IO.puts("devide_status: #{safe_action_devide_status(payload)}")
-      IO.puts("side_effect_target: #{blank_to_dash(action.target)}")
-      IO.puts("evidence: #{safe_action_evidence(payload)}")
-      IO.puts("policy_denial: #{safe_action_policy_denial(events)}")
-      IO.puts("result: #{blank_to_dash(action.result_summary)}")
-      IO.puts("next: #{blank_to_dash(Map.get(result, :guidance))}")
-      print_safe_action_events(events)
-    end
-  end
-
-  defp print_safe_action_history(%{approval_id: approval_id, events: events} = result, opts) do
-    if opts[:json] do
-      print_json(%{
-        approval_id: approval_id,
-        actions: Enum.map(Map.get(result, :actions, []), &json_orchestration_action/1),
-        events: Enum.map(events, &json_safe_action_event/1),
-        guidance: Map.get(result, :guidance, %{})
-      })
-    else
-      IO.puts("action history #{approval_id}")
-      IO.puts("approval_detail: jx approvals show #{approval_id}")
-
-      print_safe_action_history_actions(
-        Map.get(result, :actions, []),
-        Map.get(result, :guidance, %{}),
-        events
-      )
-
-      print_safe_action_events(events)
-    end
-  end
-
-  defp print_safe_action_history_actions([], _guidance, _events), do: IO.puts("actions: none")
-
-  defp print_safe_action_history_actions(actions, guidance, events) do
-    IO.puts("actions")
-
-    Enum.each(actions, fn action ->
-      payload = operation_execution_snapshot(action.payload)
-      action_events = Enum.filter(events, &(&1.action_id == action.action_id))
-
-      IO.puts(
-        "  - id=#{action.action_id} kind=#{action.action} status=#{action.status} outcome=#{blank_to_dash(action.outcome)} correlation_id=#{safe_action_correlation_id(action, payload, action_events)} target=#{blank_to_dash(action.target)} policy_denial=#{safe_action_policy_denial(action_events)}"
-      )
-
-      IO.puts("    evidence: #{safe_action_evidence(payload)}")
-      IO.puts("    next: #{blank_to_dash(Map.get(guidance, action.action_id))}")
-    end)
-  end
-
-  defp print_safe_action_events([]), do: IO.puts("events: none")
-
-  defp print_safe_action_events(events) do
-    IO.puts("events")
-
-    Enum.each(events, fn event ->
-      payload = operation_execution_snapshot(event.payload)
-      target = payload |> safe_action_payload_field("target") |> blank_to_dash()
-      reason = blank_to_dash(event.reason)
-
-      IO.puts(
-        "  - action=#{event.action_id} kind=#{event.kind} outcome=#{event.outcome} correlation_id=#{event.correlation_id} target=#{target} reason=#{reason}"
-      )
-    end)
-  end
-
-  defp safe_action_correlation_id(action, payload, events) do
-    safe_action_first_present([
-      safe_action_payload_field(payload, "correlation_id"),
-      Enum.find_value(events, &text_present_or_nil(&1.correlation_id)),
-      action.action_id
-    ])
-  end
-
-  defp safe_action_evidence(payload) do
-    [
-      {"approval", safe_action_payload_field(payload, "approval_id")},
-      {"workspace", safe_action_payload_field(payload, "workspace_id")},
-      {"command", safe_action_payload_field(payload, "command_id")},
-      {"db_isolation", safe_action_payload_field(payload, "db_isolation")},
-      {"target_ref", safe_action_payload_field(payload, "target_ref")}
-    ]
-    |> Enum.reject(fn {_label, value} -> value in [nil, ""] end)
-    |> Enum.map_join(" ", fn {label, value} -> "#{label}=#{value}" end)
-    |> blank_to_dash()
-  end
-
-  defp safe_action_policy_denial(events) do
-    events
-    |> Enum.reverse()
-    |> Enum.find_value(fn event ->
-      if event.kind == "execute_denied" and event.outcome == "policy_denied" do
-        event.reason
-      end
-    end)
-    |> blank_to_dash()
-  end
-
-  defp safe_action_devide_status(payload) do
-    case safe_action_payload_field(payload, "workspace_id") |> text_present_or_nil() do
-      nil -> "-"
-      workspace_id -> "jx devide status #{workspace_id}"
-    end
-  end
-
-  defp safe_action_payload_field(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, String.to_atom(key))
-  end
-
-  defp safe_action_payload_field(_value, _key), do: nil
-
-  defp safe_action_first_present(values) do
-    Enum.find_value(values, "-", &text_present_or_nil/1)
-  end
-
-  defp text_present_or_nil(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: value
-  end
-
-  defp text_present_or_nil(nil), do: nil
-  defp text_present_or_nil(value), do: to_string(value)
 
   defp print_approvals([], opts) do
     if opts[:json] do
@@ -13691,35 +13269,6 @@ defmodule JX.CLI do
     }
   end
 
-  defp json_safe_action_result(result) do
-    %{
-      action: json_orchestration_action(result.action),
-      safe_action: result.safe_action,
-      would_do: result.would_do,
-      dry_run_only: result.dry_run_only,
-      executed: result.executed,
-      mode: result.mode,
-      run: Map.get(result, :run),
-      devide_response: Map.get(result, :devide_response)
-    }
-  end
-
-  defp json_safe_action_event(event) do
-    %{
-      event_id: event.event_id,
-      correlation_id: event.correlation_id,
-      action_id: event.action_id,
-      approval_id: event.approval_id,
-      workspace_id: event.workspace_id,
-      command_id: event.command_id,
-      kind: event.kind,
-      outcome: event.outcome,
-      reason: event.reason,
-      payload: operation_execution_snapshot(event.payload),
-      inserted_at: format_time(event.inserted_at)
-    }
-  end
-
   defp json_notification(notification) do
     %{
       notification_id: notification.notification_id,
@@ -14607,16 +14156,7 @@ defmodule JX.CLI do
         "jx approvals ack <id> [--json]",
         "jx approvals dismiss <id> [--json]"
       ],
-      "actions" => [
-        "jx actions ls [--source <source>] [--ref <ref>] [--action <action>] [--status planned|queued|executed|skipped|error|cancelled] [--outcome helpful|ignored|blocked|superseded|failed] [-n 50] [--json]",
-        "jx actions show <action-id> [--json]",
-        "jx actions history <approval-id> [--json]",
-        "jx actions propose <approval-id> [--kind rerun_devide_command|acknowledge_approval] [--owner <owner>] [--json]",
-        "jx actions dry-run <action-id> [--owner <owner>] [--json]",
-        "jx actions execute <action-id> --confirm [--owner <owner>] [--json]",
-        "",
-        "`actions show` prints retry/reproposal guidance. Retry only planned actions after network or resolved DevIDE failures. Repropose after policy denials, stale evidence, expired/revoked actions, or approval mismatch."
-      ],
+      "actions" => ActionsCLI.usage_lines(),
       "agents" => [
         agents_register_usage(),
         "jx agents heartbeat <agent-id> [--json]",
