@@ -187,8 +187,8 @@ defmodule JX.MixProject do
       ],
       licenses: ["Apache-2.0"],
       links: %{
-        "GitHub" => "https://github.com/dl-alexandre/jx",
-        "Changelog" => "https://github.com/dl-alexandre/jx/blob/main/CHANGELOG.md"
+        "GitHub" => "https://github.com/dl-alexandre/jido_orchestrator",
+        "Changelog" => "https://github.com/dl-alexandre/jido_orchestrator/blob/main/CHANGELOG.md"
       }
     ]
   end
