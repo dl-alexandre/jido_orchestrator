@@ -12,6 +12,7 @@ defmodule JX.CLI do
   alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
   alias JX.CLI.Project, as: ProjectCLI
+  alias JX.CLI.Runners, as: RunnersCLI
   alias JX.Migrations
   alias JX.MonitorEvents
   alias JX.NextStep
@@ -3072,91 +3073,7 @@ defmodule JX.CLI do
 
   defp dispatch(["actions" | args]), do: ActionsCLI.run(args, start_app: &start_app/0)
 
-  defp dispatch(["runners", "register", runner_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          agent: :string,
-          host: :string,
-          capability: :keep,
-          workspace: :keep,
-          ttl_seconds: :integer,
-          tmux_server: :string,
-          tmux_session_prefix: :string,
-          json: :boolean
-        ]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, runners_register_usage()),
-         :ok <- validate_optional_positive("ttl-seconds", opts[:ttl_seconds]),
-         :ok <- start_app(),
-         {:ok, runner} <-
-           Workspace.register_runner(%{
-             runner_id: runner_id,
-             agent_id: opts[:agent] || "#{runner_id}:agent",
-             host_name: opts[:host] || "",
-             capabilities: Keyword.get_values(opts, :capability),
-             workspace_affinity: Keyword.get_values(opts, :workspace),
-             heartbeat_ttl_seconds: opts[:ttl_seconds] || 120,
-             tmux_server: opts[:tmux_server] || "jx",
-             tmux_session_prefix: opts[:tmux_session_prefix] || "jx-#{runner_id}"
-           }) do
-      print_runner("registered", runner, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["runners", "heartbeat", runner_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [session: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx runners heartbeat <runner-id> [--session <id>] [--json]"),
-         :ok <- start_app(),
-         {:ok, runner} <- Workspace.heartbeat_runner(runner_id, session_id: opts[:session]) do
-      print_runner("heartbeat", runner, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["runners", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [status: :string, n: :integer, json: :boolean],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 50
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, runners_ls_usage()),
-         :ok <- validate_optional_runner_status(opts[:status]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_runners(status: opts[:status], limit: limit)
-      |> print_runners(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["runners", "show", runner_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx runners show <runner-id> [--json]"),
-         :ok <- start_app(),
-         runner when not is_nil(runner) <- Workspace.get_runner(runner_id) do
-      print_runner("runner", runner, json: opts[:json] || false)
-      :ok
-    else
-      nil -> {:error, :runner_not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp dispatch(["runners" | _args]), do: {:error, "usage: #{runners_usage()}"}
+  defp dispatch(["runners" | args]), do: RunnersCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["agents" | args]), do: AgentsCLI.run(args, start_app: &start_app/0)
 
@@ -7286,17 +7203,6 @@ defmodule JX.CLI do
       {:error,
        "unsupported queue kind #{inspect(kind)}; expected workspace, approval, action, lease, agent, runner, assignment, or session"}
 
-  defp validate_optional_runner_status(nil), do: :ok
-
-  defp validate_optional_runner_status(status)
-       when status in ~w(idle busy stale disabled all),
-       do: :ok
-
-  defp validate_optional_runner_status(status),
-    do:
-      {:error,
-       "unsupported runner status #{inspect(status)}; expected idle, busy, stale, disabled, or all"}
-
   defp validate_optional_runner_session_status(nil), do: :ok
 
   defp validate_optional_runner_session_status(status)
@@ -8235,53 +8141,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_runners(runners, opts) do
-    if opts[:json] do
-      print_json(%{runners: Enum.map(runners, &json_runner/1)})
-    else
-      if runners == [] do
-        IO.puts("no runners")
-      else
-        rows =
-          Enum.map(runners, fn runner ->
-            [
-              runner.runner_id,
-              runner.agent_id,
-              runner.host_name,
-              runner.status,
-              Enum.join(runner.capabilities, ","),
-              Enum.join(runner.workspace_affinity, ","),
-              to_string(runner.active_sessions),
-              format_time(runner.last_heartbeat_at)
-            ]
-          end)
-
-        print_table(
-          ["ID", "AGENT", "HOST", "STATUS", "CAPABILITIES", "WORKSPACES", "ACTIVE", "HEARTBEAT"],
-          rows
-        )
-      end
-    end
-  end
-
-  defp print_runner(label, runner, opts) do
-    packet = json_runner(runner)
-
-    if opts[:json] do
-      print_json(packet)
-    else
-      IO.puts("#{label} #{packet.runner_id}")
-      IO.puts("agent: #{packet.agent_id}")
-      IO.puts("host: #{blank_to_dash(packet.host_name)}")
-      IO.puts("status: #{packet.status}")
-      IO.puts("capabilities: #{Enum.join(packet.capabilities, ",")}")
-      IO.puts("workspace_affinity: #{Enum.join(packet.workspace_affinity, ",")}")
-      IO.puts("tmux_server: #{blank_to_dash(packet.tmux_server)}")
-      IO.puts("tmux_session_prefix: #{blank_to_dash(packet.tmux_session_prefix)}")
-      IO.puts("last_heartbeat_at: #{format_time(packet.last_heartbeat_at)}")
-    end
-  end
-
   defp print_assignments(assignments, opts) do
     if opts[:json] do
       print_json(%{assignments: assignments})
@@ -8480,23 +8339,6 @@ defmodule JX.CLI do
       )
     end
   end
-
-  defp json_runner(%JX.DelegatedExecution.Runner{} = runner) do
-    %{
-      runner_id: runner.runner_id,
-      agent_id: runner.agent_id,
-      host_name: runner.host_name,
-      status: runner.status,
-      capabilities: decode_json_list(runner.capabilities),
-      workspace_affinity: decode_json_list(runner.workspace_affinity),
-      heartbeat_ttl_seconds: runner.heartbeat_ttl_seconds,
-      last_heartbeat_at: runner.last_heartbeat_at,
-      tmux_server: runner.tmux_server,
-      tmux_session_prefix: runner.tmux_session_prefix
-    }
-  end
-
-  defp json_runner(%{} = runner), do: runner
 
   defp json_assignment(%JX.DelegatedExecution.Assignment{} = assignment) do
     %{
@@ -13492,18 +13334,6 @@ defmodule JX.CLI do
     ]
   end
 
-  defp runners_register_usage do
-    "jx runners register <runner-id> [--agent <agent-id>] [--host <host>] [--capability <cap>] [--workspace <id>] [--ttl-seconds 120] [--tmux-server <server>] [--tmux-session-prefix <prefix>] [--json]"
-  end
-
-  defp runners_ls_usage do
-    "jx runners ls [--status idle|busy|stale|disabled|all] [-n 50] [--json]"
-  end
-
-  defp runners_usage do
-    "#{runners_register_usage()} | jx runners heartbeat <runner-id> [--session <id>] [--json] | #{runners_ls_usage()} | jx runners show <runner-id> [--json]"
-  end
-
   defp runner_sessions_ls_usage do
     "jx sessions ls [--status created|claimed|running|progressed|completed|failed|stale|expired|ended|active|all] [--runner <id>] [--workspace <id>] [--assignment <id>] [-n 50] [--json]"
   end
@@ -13583,12 +13413,7 @@ defmodule JX.CLI do
       "approvals" => ApprovalsCLI.usage_lines(),
       "actions" => ActionsCLI.usage_lines(),
       "agents" => AgentsCLI.usage_lines(),
-      "runners" => [
-        runners_register_usage(),
-        "jx runners heartbeat <runner-id> [--session <id>] [--json]",
-        runners_ls_usage(),
-        "jx runners show <runner-id> [--json]"
-      ],
+      "runners" => RunnersCLI.usage_lines(),
       "runtimes" => [
         runtimes_ls_usage(),
         runtimes_provision_usage(),
