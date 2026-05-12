@@ -17,6 +17,7 @@ defmodule JX.CLI do
   alias JX.CLI.Runners, as: RunnersCLI
   alias JX.CLI.Runtimes, as: RuntimesCLI
   alias JX.CLI.Session, as: SessionCLI
+  alias JX.CLI.Tmux, as: TmuxCLI
   alias JX.Migrations
   alias JX.MonitorEvents
   alias JX.NextStep
@@ -3661,135 +3662,7 @@ defmodule JX.CLI do
     {:error, "usage: jx remote ls [--target <ssh-target>] [--ref <ref>] [-n 50] [--json]"}
   end
 
-  defp dispatch(["tmux", "ls", host_name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [all: :boolean, server: :string])
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx tmux ls <host> [--all] [--server <server>]"),
-         :ok <- validate_tmux_options(opts),
-         :ok <- validate_tmux_server(server),
-         {:ok, sessions} <-
-           Workspace.list_tmux_sessions(host_name, all_tmux: opts[:all], tmux_server: server) do
-      print_tmux_sessions(sessions)
-      :ok
-    end
-  end
-
-  defp dispatch(["tmux", "panes", host_name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [all: :boolean, server: :string])
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx tmux panes <host> [--all] [--server <server>]"),
-         :ok <- validate_tmux_options(opts),
-         :ok <- validate_tmux_server(server),
-         {:ok, panes} <-
-           Workspace.list_tmux_panes(host_name, all_tmux: opts[:all], tmux_server: server) do
-      print_tmux_panes(panes)
-      :ok
-    end
-  end
-
-  defp dispatch(["tmux", "capture", host_name, session_name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [server: :string, window: :integer, pane: :integer, n: :integer],
-        aliases: [n: :n]
-      )
-
-    server = opts[:server] || Tmux.managed_server()
-    window = opts[:window] || 0
-    pane = opts[:pane] || 0
-    lines = opts[:n] || 80
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx tmux capture <host> <session> [--server <server>] [--window 0] [--pane 0] [-n 80]"
-           ),
-         :ok <- validate_tmux_server(server),
-         :ok <- validate_non_negative("window", window),
-         :ok <- validate_non_negative("pane", pane),
-         :ok <- validate_positive("n", lines),
-         {:ok, output} <-
-           Workspace.capture_tmux_pane(host_name, session_name,
-             tmux_server: server,
-             window: window,
-             pane: pane,
-             lines: lines
-           ) do
-      IO.write(output)
-      :ok
-    end
-  end
-
-  defp dispatch(["tmux", "send", host_name, session_name | args]) do
-    {opts, message_parts, invalid} =
-      OptionParser.parse(args,
-        strict: [server: :string, window: :integer, pane: :integer, no_enter: :boolean]
-      )
-
-    server = opts[:server] || Tmux.managed_server()
-    window = opts[:window] || 0
-    pane = opts[:pane] || 0
-    message = Enum.join(message_parts, " ") |> String.trim()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <- validate_tmux_server(server),
-         :ok <- validate_non_negative("window", window),
-         :ok <- validate_non_negative("pane", pane),
-         {:ok, message} <- required_message(message, tmux_send_usage()),
-         {:ok, directive} <-
-           Workspace.send_tmux(host_name, session_name, message,
-             tmux_server: server,
-             window: window,
-             pane: pane,
-             enter: !opts[:no_enter]
-           ) do
-      IO.puts(
-        "directive #{directive.directive_id} sent to #{host_name}/#{server}/#{session_name}:#{window}.#{pane}"
-      )
-
-      :ok
-    end
-  end
-
-  defp dispatch(["tmux", "attach", host_name, session_name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [server: :string])
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx tmux attach <host> <session> [--server <server>]"),
-         :ok <- validate_tmux_server(server) do
-      Workspace.attach_tmux(host_name, session_name, tmux_server: server)
-    end
-  end
-
-  defp dispatch(["tmux", "stop", host_name, session_name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [server: :string])
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- start_app(),
-         :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx tmux stop <host> <session> [--server <server>]"),
-         :ok <- validate_tmux_server(server),
-         :ok <- Workspace.stop_tmux(host_name, session_name, tmux_server: server) do
-      IO.puts("tmux session #{session_name} stopped on #{host_name}/#{server}")
-      :ok
-    end
-  end
-
-  defp dispatch(["tmux" | _args]) do
-    {:error,
-     "usage: jx tmux ls <host> [--all] [--server <server>] | jx tmux panes <host> [--all] [--server <server>] | jx tmux capture <host> <session> [--server <server>] [--window 0] [--pane 0] [-n 80] | #{tmux_send_usage()} | jx tmux attach <host> <session> [--server <server>] | jx tmux stop <host> <session> [--server <server>]"}
-  end
+  defp dispatch(["tmux" | args]), do: TmuxCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["process", "ls" | args]) do
     {opts, rest, invalid} = OptionParser.parse(args, strict: [kind: :string, all: :boolean])
@@ -4378,10 +4251,6 @@ defmodule JX.CLI do
 
   defp task_adopt_activity_usage do
     "jx task adopt-activity <project> --server <server> --session <name> [--window 0] [--pane 0] [--agent claude|opencode|codex]"
-  end
-
-  defp tmux_send_usage do
-    "jx tmux send <host> <session> \"<message>\" [--server <server>] [--window 0] [--pane 0] [--no-enter]"
   end
 
   defp ssh_pane_probe_usage do
@@ -6474,14 +6343,6 @@ defmodule JX.CLI do
     else
       {:error,
        "invalid tmux server #{inspect(server)}; use default, #{Tmux.managed_server()}, socket:<name>, or a tmux -L name"}
-    end
-  end
-
-  defp validate_tmux_options(opts) do
-    if opts[:all] && opts[:server] do
-      {:error, "use either --all or --server, not both"}
-    else
-      :ok
     end
   end
 
@@ -9371,49 +9232,6 @@ defmodule JX.CLI do
       ref.prompt_status in ["ready", "draft", "sent", "blocked"]
   end
 
-  defp print_tmux_sessions([]), do: IO.puts("no sessions")
-
-  defp print_tmux_sessions(sessions) do
-    rows =
-      Enum.map(sessions, fn session ->
-        [
-          session.server,
-          session.name,
-          format_time(session.created_at),
-          Integer.to_string(session.attached),
-          Integer.to_string(session.windows),
-          session.current_path
-        ]
-      end)
-
-    print_table(["SERVER", "SESSION", "CREATED", "ATTACHED", "WINDOWS", "PATH"], rows)
-  end
-
-  defp print_tmux_panes([]), do: IO.puts("no panes")
-
-  defp print_tmux_panes(panes) do
-    rows =
-      Enum.map(panes, fn pane ->
-        [
-          pane.server,
-          pane.session,
-          Integer.to_string(pane.window),
-          Integer.to_string(pane.pane),
-          pane.tty,
-          if(pane.active, do: "yes", else: "no"),
-          pane.kind,
-          pane.command,
-          pane.current_path,
-          pane.title
-        ]
-      end)
-
-    print_table(
-      ["SERVER", "SESSION", "WIN", "PANE", "TTY", "ACTIVE", "KIND", "COMMAND", "PATH", "TITLE"],
-      rows
-    )
-  end
-
   defp print_processes([]), do: IO.puts("no processes")
 
   defp print_processes(processes) do
@@ -12244,11 +12062,7 @@ defmodule JX.CLI do
         "jx sessions attach <session-id> [--json]",
         "jx sessions expire [--json]"
       ],
-      "tmux" => [
-        "jx tmux ls <host> [--all] [--server <server>]",
-        "jx tmux capture <host> <session> [--server <server>] [--window 0] [--pane 0] [-n 80]",
-        "jx tmux send <host> <session> \"<message>\" [--server <server>] [--window 0] [--pane 0] [--no-enter]"
-      ],
+      "tmux" => TmuxCLI.usage_lines(),
       "tui" => [tui_usage()],
       "wake" => [wake_usage()],
       "watch" => [watch_usage()]
