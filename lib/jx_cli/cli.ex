@@ -15,6 +15,7 @@ defmodule JX.CLI do
   alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
   alias JX.CLI.Leases, as: LeasesCLI
+  alias JX.CLI.Monitor, as: MonitorCLI
   alias JX.CLI.Project, as: ProjectCLI
   alias JX.CLI.Queue, as: QueueCLI
   alias JX.CLI.Runners, as: RunnersCLI
@@ -1900,85 +1901,7 @@ defmodule JX.CLI do
 
   defp dispatch(["orchestrate" | _args]), do: {:error, "usage: #{orchestrate_usage()}"}
 
-  defp dispatch(["monitor", command | args]) when command in ["scan", "run", "start"] do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          host: :string,
-          project: :string,
-          managed: :boolean,
-          all_processes: :boolean,
-          type: :string,
-          ssh_target: :string,
-          work_state: :string,
-          control: :string,
-          prompt_status: :string,
-          observe: :boolean,
-          lines: :integer,
-          scan_limit: :integer,
-          queue_limit: :integer,
-          event_limit: :integer,
-          interval_ms: :integer,
-          iterations: :integer,
-          json: :boolean
-        ]
-      )
-
-    lines = opts[:lines] || 40
-    scan_limit = opts[:scan_limit] || 100
-    queue_limit = opts[:queue_limit] || 5
-    event_limit = opts[:event_limit] || 20
-    interval_ms = opts[:interval_ms] || 30_000
-    iterations = opts[:iterations] || if(command == "scan", do: 1, else: 0)
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, monitor_usage()),
-         :ok <- validate_optional_session_type(opts[:type]),
-         :ok <- validate_optional_work_state(opts[:work_state]),
-         :ok <- validate_optional_work_board_control(opts[:control]),
-         :ok <- validate_optional_prompt_status(opts[:prompt_status]),
-         :ok <- validate_positive("lines", lines),
-         :ok <- validate_positive("scan-limit", scan_limit),
-         :ok <- validate_positive("queue-limit", queue_limit),
-         :ok <- validate_positive("event-limit", event_limit),
-         :ok <- validate_positive("interval-ms", interval_ms),
-         :ok <- validate_non_negative("iterations", iterations),
-         :ok <- start_app() do
-      monitor_opts = [
-        host_name: opts[:host],
-        all_tmux: !opts[:managed],
-        all_processes: opts[:all_processes] || false,
-        type: opts[:type],
-        ssh_target: opts[:ssh_target],
-        work_state: opts[:work_state],
-        control_mode: opts[:control],
-        prompt_status: opts[:prompt_status],
-        observe: Keyword.get(opts, :observe, true),
-        lines: lines,
-        limit: scan_limit,
-        queue_limit: queue_limit,
-        event_limit: event_limit
-      ]
-
-      run_monitor(command, monitor_opts, iterations, interval_ms, json: opts[:json] || false)
-    end
-  end
-
-  defp dispatch(["monitor", "status" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [consumer: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx monitor status [--consumer <name>] [--json]"),
-         :ok <- start_app() do
-      Workspace.monitor_event_status(consumer: opts[:consumer])
-      |> print_monitor_event_status(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["monitor" | _args]), do: {:error, "usage: #{monitor_usage()}"}
+  defp dispatch(["monitor" | args]), do: MonitorCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["events" | args]), do: EventsCLI.run(args, start_app: &start_app/0)
 
@@ -2978,10 +2901,6 @@ defmodule JX.CLI do
 
   defp task_adopt_activity_usage do
     "jx task adopt-activity <project> --server <server> --session <name> [--window 0] [--pane 0] [--agent claude|opencode|codex]"
-  end
-
-  defp monitor_usage do
-    "jx monitor scan|run|start [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--prompt-status none|draft|ready|sent|blocked] [--no-observe] [--lines 40] [--scan-limit 100] [--queue-limit 5] [--event-limit 20] [--interval-ms 30000] [--iterations 0] [--json] | jx monitor status [--consumer <name>] [--json]"
   end
 
   defp tui_plan_usage do
@@ -4095,37 +4014,6 @@ defmodule JX.CLI do
 
   defp orchestrate_fun do
     Process.get(:jx_cli_orchestrate_fun, &Workspace.orchestrate/1)
-  end
-
-  defp run_monitor("scan", opts, _iterations, _interval_ms, print_opts) do
-    with {:ok, scan} <- Workspace.monitor_scan(opts) do
-      print_monitor_scan(scan, print_opts)
-      :ok
-    end
-  end
-
-  defp run_monitor(command, opts, iterations, interval_ms, print_opts)
-       when command in ["run", "start"] do
-    monitor_loop(opts, iterations, interval_ms, print_opts, 1)
-  end
-
-  defp monitor_loop(_opts, iterations, _interval_ms, _print_opts, iteration)
-       when iterations > 0 and iteration > iterations do
-    :ok
-  end
-
-  defp monitor_loop(opts, iterations, interval_ms, print_opts, iteration) do
-    with {:ok, scan} <- Workspace.monitor_scan(opts) do
-      IO.puts("monitor iteration #{iteration}")
-      print_monitor_scan(scan, print_opts)
-
-      if iterations == 0 or iteration < iterations do
-        Process.sleep(interval_ms)
-        monitor_loop(opts, iterations, interval_ms, print_opts, iteration + 1)
-      else
-        :ok
-      end
-    end
   end
 
   defp print_repo_doctor_report(report, json: true), do: print_json(%{repo_doctor: report})
@@ -7461,79 +7349,6 @@ defmodule JX.CLI do
     print_table(["HOST", "TRANSPORT", "SUBSYSTEM", "ERROR"], rows)
   end
 
-  defp print_monitor_scan(scan, opts) do
-    if opts[:json] do
-      print_json(json_monitor_scan(scan))
-    else
-      print_summary_counts("monitor", %{
-        sessions: scan.sessions_total,
-        events_saved: scan.events_saved,
-        queues: scan.queues_total,
-        watches: Map.get(scan, :watches_total, 0),
-        watch_actions: Map.get(scan, :watch_actions_total, 0),
-        ci_watches: Map.get(scan, :ci_watches_total, 0),
-        delegations: Map.get(scan, :delegations_total, 0),
-        delegation_reviews: Map.get(scan, :delegation_reviews_total, 0),
-        delegation_long_running: get_in(scan, [:delegation_timing, :active, :long_running]) || 0,
-        delegation_conflicts: get_in(scan, [:delegation_preflight, :conflicts_total]) || 0,
-        notifications: Map.get(scan, :notifications_saved, 0),
-        profiles: scan.profiles_total
-      })
-
-      IO.puts("")
-      print_summary_counts("observation refresh", scan.observation_refresh)
-
-      unless scan.events == [] do
-        IO.puts("")
-        IO.puts("new events")
-        print_monitor_events(scan.events, json: false)
-      end
-
-      unless scan.queues == [] do
-        IO.puts("")
-        IO.puts("queues")
-        print_monitor_queue_rows(scan.queues)
-      end
-
-      watch_updates = Map.get(scan, :watch_updates, [])
-
-      unless watch_updates == [] do
-        IO.puts("")
-        IO.puts("watch updates")
-        print_watch_updates(watch_updates)
-      end
-
-      watch_actions = Map.get(scan, :watch_actions, [])
-
-      unless watch_actions == [] do
-        IO.puts("")
-        IO.puts("watch actions")
-        print_watch_actions(watch_actions)
-      end
-
-      ci_watch_updates = Map.get(scan, :ci_watch_updates, [])
-
-      unless ci_watch_updates == [] do
-        IO.puts("")
-        IO.puts("CI watch updates")
-        print_ci_watch_updates(ci_watch_updates)
-      end
-
-      notifications = Map.get(scan, :notifications, [])
-
-      unless notifications == [] do
-        IO.puts("")
-        IO.puts("notifications")
-        print_notifications(notifications, json: false)
-      end
-
-      unless scan.errors == [] do
-        IO.puts("")
-        print_summary_errors(scan.errors)
-      end
-    end
-  end
-
   defp print_orchestrate_report(report, opts) do
     if opts[:json] do
       print_json(json_orchestrate_report(report))
@@ -7621,134 +7436,6 @@ defmodule JX.CLI do
       ],
       rows
     )
-  end
-
-  defp print_monitor_queue_rows(queues) do
-    rows =
-      Enum.map(queues, fn queue ->
-        [
-          queue.action,
-          Integer.to_string(queue.total),
-          format_counts(queue.by_priority),
-          format_counts(queue.by_safety),
-          format_counts(queue.by_control),
-          session_queue_refs(queue),
-          session_queue_focus(queue)
-        ]
-      end)
-
-    print_table(["ACTION", "TOTAL", "PRIORITY", "SAFETY", "CONTROL", "REFS", "FOCUS"], rows)
-  end
-
-  defp print_watch_updates(updates) do
-    rows =
-      Enum.map(updates, fn update ->
-        [
-          update.watch.watch_id,
-          update.previous_status,
-          update.status,
-          update.watch.mode,
-          update.watch.ref,
-          truncate(update.watch.goal, 44),
-          truncate(update.summary, 72)
-        ]
-      end)
-
-    print_table(["WATCH", "FROM", "TO", "MODE", "REF", "GOAL", "SUMMARY"], rows)
-  end
-
-  defp print_watch_actions(actions) do
-    rows =
-      Enum.map(actions, fn action ->
-        [
-          action.watch_id,
-          action.status,
-          action.action,
-          action.ref,
-          Map.get(action, :prompt_status, ""),
-          truncate(Map.get(action, :reason, ""), 40),
-          truncate(action.result_summary, 72)
-        ]
-      end)
-
-    print_table(["WATCH", "STATUS", "ACTION", "REF", "PROMPT", "REASON", "SUMMARY"], rows)
-  end
-
-  defp print_ci_watch_updates(updates) do
-    rows =
-      Enum.map(updates, fn update ->
-        [
-          update.watch.watch_id,
-          update.previous_status,
-          update.status,
-          update.watch.mode,
-          update.watch.repo,
-          "##{update.watch.pr_number}",
-          update.watch.ref,
-          truncate(update.summary, 72)
-        ]
-      end)
-
-    print_table(["WATCH", "FROM", "TO", "MODE", "REPO", "PR", "REF", "SUMMARY"], rows)
-  end
-
-  defp print_monitor_events([], opts) do
-    if opts[:json] do
-      print_json(%{events: []})
-    else
-      IO.puts("no monitor events")
-    end
-  end
-
-  defp print_monitor_events(events, opts) do
-    if opts[:json] do
-      print_json(%{events: Enum.map(events, &json_monitor_event/1)})
-    else
-      rows =
-        Enum.map(events, fn event ->
-          [
-            Integer.to_string(event.id),
-            format_time(event.inserted_at),
-            event.kind,
-            event.severity,
-            event.ref,
-            event.project,
-            event.work_state,
-            event.action,
-            truncate(event.summary, 120)
-          ]
-        end)
-
-      print_table(
-        ["ID", "TIME", "KIND", "SEVERITY", "REF", "PROJECT", "WORK", "ACTION", "SUMMARY"],
-        rows
-      )
-    end
-  end
-
-  defp print_monitor_event_status(status, opts) do
-    if opts[:json] do
-      print_json(json_monitor_event_status(status))
-    else
-      rows = [
-        ["consumer", status.consumer],
-        ["cursor_source", Map.get(status.cursor, :source, "-")],
-        ["last_event_id", Integer.to_string(Map.get(status.cursor, :last_event_id, 0))],
-        ["latest_event_id", Integer.to_string(status.latest_event_id)],
-        ["unread_total", Integer.to_string(status.unread_total)],
-        ["caught_up", inspect(status.caught_up)],
-        ["last_seen_at", format_time(Map.get(status.cursor, :last_seen_at))],
-        ["updated_at", format_time(Map.get(status.cursor, :updated_at))]
-      ]
-
-      print_table(["FIELD", "VALUE"], rows)
-
-      if status.latest_event do
-        IO.puts("")
-        IO.puts("latest event")
-        print_monitor_events([status.latest_event], json: false)
-      end
-    end
   end
 
   defp print_monitor_cursor(cursor) do
@@ -8033,17 +7720,6 @@ defmodule JX.CLI do
     }
   end
 
-  defp json_monitor_event_status(status) do
-    %{
-      consumer: status.consumer,
-      cursor: json_monitor_cursor(status.cursor),
-      latest_event_id: status.latest_event_id,
-      unread_total: status.unread_total,
-      caught_up: status.caught_up,
-      latest_event: maybe_json_monitor_event(status.latest_event)
-    }
-  end
-
   defp json_monitor_cursor(cursor) do
     %{
       consumer: Map.get(cursor, :consumer),
@@ -8056,9 +7732,6 @@ defmodule JX.CLI do
 
   defp maybe_json_monitor_cursor(nil), do: nil
   defp maybe_json_monitor_cursor(cursor), do: json_monitor_cursor(cursor)
-
-  defp maybe_json_monitor_event(nil), do: nil
-  defp maybe_json_monitor_event(event), do: json_monitor_event(event)
 
   defp json_operation_execution(execution) do
     %{
@@ -8659,31 +8332,6 @@ defmodule JX.CLI do
     |> Enum.join(",")
   end
 
-  defp session_queue_refs(%{items: items}) do
-    items
-    |> Enum.map(& &1.ref)
-    |> Enum.join(",")
-    |> truncate(72)
-  end
-
-  defp session_queue_focus(%{items: []}), do: ""
-
-  defp session_queue_focus(%{items: [item | _rest]}) do
-    first_present([item.task, item.current_path, item.pane])
-    |> truncate(96)
-  end
-
-  defp first_present(values) do
-    Enum.find_value(values, "", fn
-      value when is_binary(value) ->
-        value = String.trim(value)
-        if value == "", do: nil, else: value
-
-      _value ->
-        nil
-    end)
-  end
-
   defp work_board_git_summary(nil), do: ""
 
   defp work_board_git_summary(git) do
@@ -8806,14 +8454,14 @@ defmodule JX.CLI do
       "leases" => LeasesCLI.usage_lines(),
       "meet" => [meet_usage()],
       "modes" => [modes_usage()],
-      "monitor" => [monitor_usage(), orchestrate_usage(), orchestrator_usage()],
+      "monitor" => MonitorCLI.usage_lines() ++ [orchestrate_usage(), orchestrator_usage()],
       "next" => [next_usage()],
       "notifications" => [
         "jx notifications ls [--status unread|acknowledged|dismissed] [--severity info|notice|warning|critical] [--ref <ref>] [--project <name>] [-n 50] [--json]",
         "jx notifications ack <notification-id>|--all [--ref <ref>] [--project <name>] [--json]",
         "jx notifications compact [--ref <ref>] [--project <name>] [--json]"
       ],
-      "orchestrator" => [orchestrator_usage(), orchestrate_usage(), monitor_usage()],
+      "orchestrator" => [orchestrator_usage(), orchestrate_usage()] ++ MonitorCLI.usage_lines(),
       "policy" => [
         "jx policy overview [--json]",
         "jx policy check <action> [--json]",
