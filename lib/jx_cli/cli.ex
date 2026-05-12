@@ -8,6 +8,7 @@ defmodule JX.CLI do
   alias JX.CLI.Actions, as: ActionsCLI
   alias JX.CLI.Agents, as: AgentsCLI
   alias JX.CLI.Approvals, as: ApprovalsCLI
+  alias JX.CLI.Assignments, as: AssignmentsCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
   alias JX.CLI.Fanout, as: FanoutCLI
   alias JX.CLI.Host, as: HostCLI
@@ -3077,191 +3078,7 @@ defmodule JX.CLI do
 
   defp dispatch(["agents" | args]), do: AgentsCLI.run(args, start_app: &start_app/0)
 
-  defp dispatch(["assignments", "create", action_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [created_by: :string, ttl_seconds: :integer, json: :boolean]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx assignments create <action-id> [--created-by <operator>] [--ttl-seconds 1800] [--json]"
-           ),
-         :ok <- validate_optional_positive("ttl-seconds", opts[:ttl_seconds]),
-         :ok <- start_app(),
-         {:ok, assignment} <-
-           Workspace.create_assignment(action_id,
-             created_by: opts[:created_by] || "operator",
-             ttl_seconds: opts[:ttl_seconds] || 30 * 60
-           ) do
-      print_assignment("created", assignment, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["assignments", "ls" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [status: :string, agent: :string, workspace: :string, n: :integer, json: :boolean],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 50
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, assignments_ls_usage()),
-         :ok <- validate_optional_assignment_status(opts[:status]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_assignments(
-        status: opts[:status],
-        agent_id: opts[:agent],
-        workspace_id: opts[:workspace],
-        limit: limit
-      )
-      |> print_assignments(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["assignments", "claim", assignment_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          agent: :string,
-          runner: :string,
-          session: :string,
-          tmux_session: :string,
-          log_path: :string,
-          json: :boolean
-        ]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx assignments claim <assignment-id> (--agent <agent-id>|--runner <runner-id>) [--session <id>] [--tmux-session <name>] [--log-path <path>] [--json]"
-           ),
-         :ok <- validate_assignment_claim_owner(opts[:agent], opts[:runner]),
-         :ok <- start_app() do
-      if opts[:runner] do
-        with {:ok, result} <-
-               Workspace.claim_runner_assignment(assignment_id, opts[:runner],
-                 session_id: opts[:session],
-                 tmux_session_name: opts[:tmux_session],
-                 log_path: opts[:log_path]
-               ) do
-          print_runner_assignment_claim(result, json: opts[:json] || false)
-          :ok
-        end
-      else
-        with {:ok, assignment} <- Workspace.claim_assignment(assignment_id, opts[:agent]) do
-          print_assignment("claimed", assignment, json: opts[:json] || false)
-          :ok
-        end
-      end
-    end
-  end
-
-  defp dispatch(["assignments", "start", assignment_id | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [agent: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx assignments start <assignment-id> --agent <agent-id> [--json]"
-           ),
-         :ok <- validate_required_option("agent", opts[:agent]),
-         :ok <- start_app(),
-         {:ok, assignment} <- Workspace.start_assignment(assignment_id, opts[:agent]) do
-      print_assignment("started", assignment, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["assignments", "progress", assignment_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [agent: :string, summary: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx assignments progress <assignment-id> --agent <agent-id> --summary <text> [--json]"
-           ),
-         :ok <- validate_required_option("agent", opts[:agent]),
-         :ok <- validate_required_option("summary", opts[:summary]),
-         :ok <- start_app(),
-         {:ok, assignment} <-
-           Workspace.progress_assignment(assignment_id, opts[:agent], opts[:summary]) do
-      print_assignment("progressed", assignment, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["assignments", "execute", assignment_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [agent: :string, confirm: :boolean, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx assignments execute <assignment-id> --agent <agent-id> --confirm [--json]"
-           ),
-         :ok <- validate_required_option("agent", opts[:agent]),
-         :ok <- start_app() do
-      if opts[:confirm] do
-        with {:ok, assignment} <-
-               Workspace.execute_assignment(assignment_id, opts[:agent], confirm: true) do
-          print_assignment("executed", assignment, json: opts[:json] || false)
-          :ok
-        end
-      else
-        {:error, "confirmation required; pass --confirm to execute this assignment"}
-      end
-    end
-  end
-
-  defp dispatch(["assignments", "fail", assignment_id | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [agent: :string, summary: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx assignments fail <assignment-id> --agent <agent-id> --summary <text> [--json]"
-           ),
-         :ok <- validate_required_option("agent", opts[:agent]),
-         :ok <- validate_required_option("summary", opts[:summary]),
-         :ok <- start_app(),
-         {:ok, assignment} <-
-           Workspace.fail_assignment(assignment_id, opts[:agent], opts[:summary]) do
-      print_assignment("failed", assignment, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["assignments", "expire" | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx assignments expire [--json]"),
-         :ok <- start_app() do
-      Workspace.expire_assignments()
-      |> print_assignment_expiration(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["assignments" | _args]), do: {:error, "usage: #{assignments_usage()}"}
+  defp dispatch(["assignments" | args]), do: AssignmentsCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["queue", "ls" | args]) do
     {opts, rest, invalid} =
@@ -7214,27 +7031,6 @@ defmodule JX.CLI do
       {:error,
        "unsupported session status #{inspect(status)}; expected created, claimed, running, progressed, completed, failed, stale, expired, ended, active, or all"}
 
-  defp validate_assignment_claim_owner(nil, nil), do: {:error, "--agent or --runner is required"}
-  defp validate_assignment_claim_owner("", nil), do: {:error, "--agent or --runner is required"}
-  defp validate_assignment_claim_owner(nil, ""), do: {:error, "--agent or --runner is required"}
-
-  defp validate_assignment_claim_owner(agent, runner)
-       when agent not in [nil, ""] and runner not in [nil, ""],
-       do: {:error, "use either --agent or --runner, not both"}
-
-  defp validate_assignment_claim_owner(_agent, _runner), do: :ok
-
-  defp validate_optional_assignment_status(nil), do: :ok
-
-  defp validate_optional_assignment_status(status)
-       when status in ~w(created claimed started progressed completed failed expired active all),
-       do: :ok
-
-  defp validate_optional_assignment_status(status),
-    do:
-      {:error,
-       "unsupported assignment status #{inspect(status)}; expected created, claimed, started, progressed, completed, failed, expired, active, or all"}
-
   defp validate_optional_queue_risk(nil), do: :ok
 
   defp validate_optional_queue_risk(risk)
@@ -8141,86 +7937,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_assignments(assignments, opts) do
-    if opts[:json] do
-      print_json(%{assignments: assignments})
-    else
-      if assignments == [] do
-        IO.puts("no assignments")
-      else
-        rows =
-          Enum.map(assignments, fn assignment ->
-            [
-              assignment.assignment_id,
-              assignment.status,
-              assignment.claimant_agent_id,
-              assignment.runner_id,
-              assignment.session_id,
-              assignment.workspace_id,
-              assignment.action_id,
-              assignment.safe_action_kind,
-              truncate(assignment.summary, 64),
-              assignment.next
-            ]
-          end)
-
-        print_table(
-          [
-            "ID",
-            "STATUS",
-            "AGENT",
-            "RUNNER",
-            "SESSION",
-            "WORKSPACE",
-            "ACTION",
-            "KIND",
-            "SUMMARY",
-            "NEXT"
-          ],
-          rows
-        )
-      end
-    end
-  end
-
-  defp print_runner_assignment_claim(result, opts) do
-    packet = %{
-      assignment: json_assignment(result.assignment),
-      session: json_runner_session(result.session)
-    }
-
-    if opts[:json] do
-      print_json(packet)
-    else
-      IO.puts("claimed #{packet.assignment.assignment_id}")
-      IO.puts("runner: #{packet.session.runner_id}")
-      IO.puts("session: #{packet.session.session_id}")
-      IO.puts("tmux: #{packet.session.tmux_server}/#{packet.session.tmux_session_name}")
-      IO.puts("next: jx sessions show #{packet.session.session_id}")
-    end
-  end
-
-  defp print_assignment(label, assignment, opts) do
-    packet = json_assignment(assignment)
-
-    if opts[:json] do
-      print_json(packet)
-    else
-      IO.puts("#{label} #{packet.assignment_id}")
-      IO.puts("status: #{packet.status}")
-      IO.puts("agent: #{blank_to_dash(packet.claimant_agent_id)}")
-      IO.puts("runner: #{blank_to_dash(packet.runner_id)}")
-      IO.puts("session: #{blank_to_dash(packet.session_id)}")
-      IO.puts("workspace: #{blank_to_dash(packet.workspace_id)}")
-      IO.puts("approval: #{blank_to_dash(packet.approval_id)}")
-      IO.puts("action: #{packet.action_id}")
-      IO.puts("kind: #{packet.safe_action_kind}")
-      IO.puts("correlation_id: #{packet.correlation_id}")
-      IO.puts("summary: #{blank_to_dash(packet.summary)}")
-      IO.puts("next: #{assignment_next(packet)}")
-    end
-  end
-
   defp print_runner_sessions(sessions, opts) do
     packets = Enum.map(sessions, &json_runner_session/1)
 
@@ -8325,46 +8041,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_assignment_expiration(assignments, opts) do
-    packets = Enum.map(assignments, &json_assignment/1)
-
-    if opts[:json] do
-      print_json(%{expired: packets})
-    else
-      IO.puts("expired #{length(packets)} assignment#{plural(length(packets))}")
-
-      Enum.each(
-        packets,
-        &IO.puts("  #{&1.assignment_id} #{&1.action_id} #{&1.claimant_agent_id}")
-      )
-    end
-  end
-
-  defp json_assignment(%JX.DelegatedExecution.Assignment{} = assignment) do
-    %{
-      assignment_id: assignment.assignment_id,
-      action_id: assignment.action_id,
-      approval_id: assignment.approval_id,
-      workspace_id: assignment.workspace_id,
-      safe_action_kind: assignment.safe_action_kind,
-      status: assignment.status,
-      claimant_agent_id: assignment.claimant_agent_id,
-      runner_id: assignment.runner_id,
-      session_id: assignment.session_id,
-      lease_id: assignment.lease_id,
-      correlation_id: assignment.correlation_id,
-      required_capabilities: decode_json_list(assignment.required_capabilities),
-      summary: assignment.summary,
-      claimed_at: assignment.claimed_at,
-      started_at: assignment.started_at,
-      last_report_at: assignment.last_report_at,
-      completed_at: assignment.completed_at,
-      expires_at: assignment.expires_at
-    }
-  end
-
-  defp json_assignment(%{} = assignment), do: assignment
-
   defp json_runner_session(%JX.DelegatedExecution.RunnerSession{} = session) do
     %{
       session_id: session.session_id,
@@ -8389,15 +8065,6 @@ defmodule JX.CLI do
   end
 
   defp json_runner_session(%{} = session), do: session
-
-  defp assignment_next(%{status: "created", assignment_id: id}),
-    do: "jx assignments claim #{id} --agent <agent-id>"
-
-  defp assignment_next(%{status: status, assignment_id: id})
-       when status in ["claimed", "started", "progressed"],
-       do: "jx assignments execute #{id} --agent <agent-id> --confirm"
-
-  defp assignment_next(%{assignment_id: id}), do: "jx timeline assignment #{id}"
 
   defp runner_session_next(%{status: status, session_id: id})
        when status in ["claimed", "running", "progressed", "stale"],
@@ -12947,17 +12614,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp decode_json_list(value) when is_list(value), do: Enum.map(value, &to_string/1)
-
-  defp decode_json_list(value) when is_binary(value) do
-    case Jason.decode(value) do
-      {:ok, values} when is_list(values) -> Enum.map(values, &to_string/1)
-      _other -> []
-    end
-  end
-
-  defp decode_json_list(_value), do: []
-
   defp print_saved_count(nil), do: :ok
   defp print_saved_count(count), do: IO.puts("saved #{count} observations")
 
@@ -13338,24 +12994,6 @@ defmodule JX.CLI do
     "jx sessions ls [--status created|claimed|running|progressed|completed|failed|stale|expired|ended|active|all] [--runner <id>] [--workspace <id>] [--assignment <id>] [-n 50] [--json]"
   end
 
-  defp assignments_ls_usage do
-    "jx assignments ls [--status created|claimed|started|progressed|completed|failed|expired|active|all] [--agent <id>] [--workspace <id>] [-n 50] [--json]"
-  end
-
-  defp assignments_usage do
-    [
-      "jx assignments create <action-id> [--created-by <operator>] [--ttl-seconds 1800] [--json]",
-      assignments_ls_usage(),
-      "jx assignments claim <assignment-id> (--agent <agent-id>|--runner <runner-id>) [--session <id>] [--tmux-session <name>] [--log-path <path>] [--json]",
-      "jx assignments start <assignment-id> --agent <agent-id> [--json]",
-      "jx assignments progress <assignment-id> --agent <agent-id> --summary <text> [--json]",
-      "jx assignments execute <assignment-id> --agent <agent-id> --confirm [--json]",
-      "jx assignments fail <assignment-id> --agent <agent-id> --summary <text> [--json]",
-      "jx assignments expire [--json]"
-    ]
-    |> Enum.join(" | ")
-  end
-
   defp queue_ls_usage do
     "jx queue ls [--kind workspace|approval|action|lease|agent|runner|assignment|session] [--workspace <id>] [--owner <owner>] [--risk blocked|stale|risky|awaiting_operator] [--freshness fresh|stale|unknown] [--sort urgency|freshness|owner|risk] [--stale-after-seconds 900] [-n 50] [--json]"
   end
@@ -13423,7 +13061,7 @@ defmodule JX.CLI do
         "",
         "Runtime commands manage placement and worktree lifecycle evidence only. They route approved safe actions to isolated environments; DevIDE still resolves executable safe actions."
       ],
-      "assignments" => String.split(assignments_usage(), " | "),
+      "assignments" => AssignmentsCLI.usage_lines(),
       "call" => [call_usage()],
       "ci" => [ci_usage()],
       "delegate" => [delegate_usage()],
