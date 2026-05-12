@@ -7,6 +7,7 @@ defmodule JX.CLI do
   alias JX.CiDigest
   alias JX.CLI.DevIDE, as: DevIDECLI
   alias JX.CLI.Host, as: HostCLI
+  alias JX.CLI.Project, as: ProjectCLI
   alias JX.Fanout
   alias JX.Migrations
   alias JX.MonitorEvents
@@ -67,117 +68,7 @@ defmodule JX.CLI do
 
   defp dispatch(["hosts" | args]), do: HostCLI.run_plural(args, start_app: &start_app/0)
 
-  defp dispatch(["project", "add", name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [host: :string, repo: :string])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx project add <name> --host <host> --repo <path>"),
-         :ok <- start_app(),
-         {:ok, project} <-
-           Workspace.add_project(%{
-             name: name,
-             host_name: opts[:host],
-             repo_path: opts[:repo]
-           }) do
-      IO.puts("project #{project.name} registered: host=#{opts[:host]} repo=#{project.repo_path}")
-      :ok
-    end
-  end
-
-  defp dispatch(["project", "audit", name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args, strict: [host: :string, json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, project_audit_usage()),
-         :ok <- start_app(),
-         {:ok, audit} <- Workspace.project_audit(name, host_name: opts[:host]) do
-      print_project_audit(audit, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["project", "gate", name | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, project_gate_usage()),
-         :ok <- start_app(),
-         {:ok, report} <- Workspace.project_gate(name) do
-      print_project_gate(report, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["project", "brief", name | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          host: :string,
-          managed: :boolean,
-          all_processes: :boolean,
-          type: :string,
-          ssh_target: :string,
-          work_state: :string,
-          control: :string,
-          observe: :boolean,
-          lines: :integer,
-          scan_limit: :integer,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    lines = opts[:lines] || 80
-    limit = opts[:n] || 5
-    scan_limit = opts[:scan_limit] || max(limit * 5, 100)
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, project_brief_usage()),
-         :ok <- validate_optional_session_type(opts[:type]),
-         :ok <- validate_optional_work_state(opts[:work_state]),
-         :ok <- validate_optional_work_board_control(opts[:control]),
-         :ok <- validate_positive("lines", lines),
-         :ok <- validate_positive("scan-limit", scan_limit),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app(),
-         {:ok, brief} <-
-           Workspace.project_brief(name,
-             host_name: opts[:host],
-             all_tmux: !opts[:managed],
-             all_processes: opts[:all_processes] || false,
-             type: opts[:type],
-             ssh_target: opts[:ssh_target],
-             work_state: opts[:work_state],
-             control_mode: opts[:control],
-             observe: Keyword.get(opts, :observe, true),
-             lines: lines,
-             scan_limit: scan_limit,
-             limit: limit
-           ) do
-      print_project_brief(brief, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["project", "ls" | args]) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [json: :boolean])
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, "jx project ls [--json]"),
-         :ok <- start_app() do
-      Workspace.list_projects()
-      |> print_projects(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["project" | _args]) do
-    {:error,
-     "usage: jx project add <name> --host <host> --repo <path> | #{project_audit_usage()} | #{project_gate_usage()} | #{project_brief_usage()} | jx project ls"}
-  end
+  defp dispatch(["project" | args]), do: ProjectCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["promote", "preflight", name | args]) do
     {opts, rest, invalid} =
@@ -5733,14 +5624,6 @@ defmodule JX.CLI do
     "jx portfolio summary [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 80] [--scan-limit 100] [-n 25] [--json]"
   end
 
-  defp project_audit_usage do
-    "jx project audit <name> [--host <host>] [--json]"
-  end
-
-  defp project_gate_usage do
-    "jx project gate <name> [--json]"
-  end
-
   defp promotion_preflight_usage do
     "jx promote preflight <project> --from <source-branch> --to <target-branch> [--json]"
   end
@@ -5763,10 +5646,6 @@ defmodule JX.CLI do
 
   defp repo_usage do
     "#{repo_doctor_usage()} | #{repo_gate_usage()}"
-  end
-
-  defp project_brief_usage do
-    "jx project brief <name> [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 80] [--scan-limit 100] [-n 5] [--json]"
   end
 
   defp call_brief_usage do
@@ -6924,32 +6803,6 @@ defmodule JX.CLI do
     IO.puts("#{title}:")
     Enum.each(items, &IO.puts("- #{&1}"))
   end
-
-  defp print_project_gate(report, json: true), do: print_json(%{project_gate: report})
-
-  defp print_project_gate(report, json: false) do
-    IO.puts("Project: #{report.project}")
-    IO.puts("Promotion eligible: #{yes_no(report.eligible)}")
-    IO.puts("Status: #{report.status}")
-    IO.puts("")
-    IO.puts("Hosts:")
-
-    case report.hosts do
-      [] ->
-        IO.puts("- none")
-
-      hosts ->
-        Enum.each(hosts, fn host ->
-          IO.puts("- #{host.host}: #{host.status} - #{project_gate_reasons(host.reasons)}")
-        end)
-    end
-
-    IO.puts("")
-    print_repo_gate_list("Required fixes", report.required_fixes)
-  end
-
-  defp project_gate_reasons([]), do: "none"
-  defp project_gate_reasons(reasons), do: Enum.join(reasons, ", ")
 
   defp print_promotion_preflight(report, json: true),
     do: print_json(%{promotion_preflight: report})
@@ -10378,138 +10231,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp print_projects([], opts) do
-    if opts[:json] do
-      print_json(%{projects: []})
-    else
-      IO.puts("no projects")
-    end
-  end
-
-  defp print_projects(projects, opts) do
-    if opts[:json] do
-      print_json(%{projects: Enum.map(projects, &json_project/1)})
-    else
-      rows =
-        Enum.map(projects, fn project ->
-          host = Map.get(project, :host)
-
-          [
-            project.name,
-            project.slug,
-            (host && host.name) || "",
-            (host && host.transport) || "",
-            (host && host.ssh_target) || "",
-            project.repo_path
-          ]
-        end)
-
-      print_table(["PROJECT", "SLUG", "HOST", "TRANSPORT", "SSH", "REPO"], rows)
-    end
-  end
-
-  defp print_project_audit(audit, json: true), do: print_json(%{project_audit: audit})
-
-  defp print_project_audit(audit, json: false) do
-    IO.puts("project audit #{audit.project}")
-    print_summary_counts("summary", audit.summary)
-
-    unless audit.warnings == [] do
-      IO.puts("warnings: #{Enum.join(audit.warnings, "; ")}")
-    end
-
-    rows =
-      Enum.map(audit.instances, fn instance ->
-        [
-          instance.host,
-          instance.status,
-          instance.branch,
-          truncate(instance.head, 12),
-          instance.upstream,
-          format_optional_integer(instance.ahead),
-          format_optional_integer(instance.behind),
-          if(instance.dirty, do: "yes", else: "no"),
-          Integer.to_string(length(instance.changes)),
-          truncate(Enum.join(instance.warnings, "; "), 48),
-          truncate(instance.repo_path, 80)
-        ]
-      end)
-
-    print_table(
-      [
-        "HOST",
-        "STATUS",
-        "BRANCH",
-        "HEAD",
-        "UPSTREAM",
-        "AHEAD",
-        "BEHIND",
-        "DIRTY",
-        "CHG",
-        "WARN",
-        "REPO"
-      ],
-      rows
-    )
-  end
-
-  defp print_project_brief(brief, json: true), do: print_json(%{project_brief: brief})
-
-  defp print_project_brief(brief, json: false) do
-    project = Map.get(brief, :project, %{})
-    next_step = Map.get(brief, :next, %{})
-    mode = Map.get(brief, :mode, %{})
-    counts = Map.get(brief, :counts, %{})
-
-    IO.puts("project #{Map.get(project, :name, "")}")
-    IO.puts("headline: #{Map.get(brief, :headline, "")}")
-    IO.puts("next: #{Map.get(next_step, :next, "")}")
-    IO.puts("mode: #{Map.get(mode, :id, "")} - #{Map.get(mode, :title, "")}")
-    IO.puts("command: #{Map.get(next_step, :command, "")}")
-    IO.puts("")
-
-    print_summary_counts("project", counts)
-
-    refs = Map.get(brief, :refs, [])
-
-    unless refs == [] do
-      IO.puts("")
-
-      rows =
-        Enum.map(refs, fn ref ->
-          [
-            Map.get(ref, :ref, ""),
-            Map.get(ref, :state, ""),
-            Map.get(ref, :work_state, ""),
-            Map.get(ref, :prompt_status, ""),
-            Map.get(ref, :control_mode, ""),
-            truncate(Map.get(ref, :next_step, ""), 72)
-          ]
-        end)
-
-      print_table(["REF", "STATE", "WORK", "PROMPT", "CONTROL", "NEXT"], rows)
-    end
-
-    agenda = Map.get(brief, :agenda, [])
-
-    unless agenda == [] do
-      IO.puts("")
-
-      rows =
-        Enum.map(agenda, fn item ->
-          [
-            Map.get(item, :kind, ""),
-            Map.get(item, :project, ""),
-            Map.get(item, :ref, ""),
-            Map.get(item, :id, ""),
-            truncate(Map.get(item, :label, ""), 96)
-          ]
-        end)
-
-      print_table(["KIND", "PROJECT", "REF", "ID", "LABEL"], rows)
-    end
-  end
-
   defp print_ci_digest(digest, opts) do
     if opts[:json] do
       print_json(digest)
@@ -13723,20 +13444,6 @@ defmodule JX.CLI do
     }
   end
 
-  defp json_project(project) do
-    host = Map.get(project, :host)
-
-    %{
-      name: project.name,
-      slug: project.slug,
-      repo_path: project.repo_path,
-      host: (host && host.name) || "",
-      transport: (host && host.transport) || "",
-      ssh_target: (host && host.ssh_target) || "",
-      workspace_path: (host && host.workspace_path) || ""
-    }
-  end
-
   defp json_sessions_summary(summary) do
     %{
       generated_at: format_time(summary.generated_at),
@@ -15317,14 +15024,7 @@ defmodule JX.CLI do
         "jx queue workspace <workspace-id> [--json]",
         "jx queue rebuild [--json]"
       ],
-      "project" => [
-        "jx project add <name> --host <host> --repo <path>",
-        project_audit_usage(),
-        project_gate_usage(),
-        project_brief_usage(),
-        "jx project ls [--json]",
-        portfolio_summary_usage()
-      ],
+      "project" => ProjectCLI.usage(),
       "repo" => [repo_doctor_usage(), repo_gate_usage()],
       "sessions" => [
         "jx sessions [--host <host>] [--managed] [--all-processes] [--type agent|process|ssh|task|tmux] [--action <action>] [--ssh-target <target>] [--json]",
