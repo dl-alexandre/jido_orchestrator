@@ -106,6 +106,7 @@ defmodule JX do
   defdelegate broadcast_sessions(message, opts \\ []), to: Workspace
   defdelegate resume_adopt_session(ref, project_name, opts \\ []), to: Workspace
   defdelegate stream_adopt_session(ref, project_name, opts \\ []), to: Workspace
+  defdelegate cleanup_dry_run(opts \\ []), to: JX.ResourceOwnerships
   defdelegate attach(task_id), to: Workspace
   defdelegate logs(task_id, opts \\ []), to: Workspace
   defdelegate stop(task_id), to: Workspace

@@ -55,6 +55,7 @@ defmodule JX.Workspace do
   alias JX.Projects
   alias JX.RepoDoctor
   alias JX.RemoteSessions
+  alias JX.ResourceOwnerships
   alias JX.SSHSessions
   alias JX.SafeActions
   alias JX.RuntimeEnvironments
@@ -6071,9 +6072,91 @@ defmodule JX.Workspace do
     attrs = Map.put(attrs, :launch_command, AgentRunner.command(attrs))
 
     case Tasks.insert_task(attrs) do
-      {:ok, task} -> Tasks.get_task_by_id(task.task_id)
-      {:error, changeset} -> raise "could not create task: #{inspect(changeset.errors)}"
+      {:ok, task} ->
+        task = Tasks.get_task_by_id(task.task_id)
+        register_task_resources!(project, task)
+        task
+
+      {:error, changeset} ->
+        raise "could not create task: #{inspect(changeset.errors)}"
     end
+  end
+
+  defp register_task_resources!(project, task) do
+    owner_project = project.slug || project.name || "unknown"
+
+    with :ok <-
+           register_resource(
+             %{
+               owner_project: owner_project,
+               execution_id: task.task_id,
+               resource_name: task.session_name,
+               tmux_server: task.tmux_server,
+               reason: "JX task tmux session",
+               metadata: Jason.encode!(%{task_id: task.task_id, project: owner_project})
+             },
+             :tmux_session
+           ),
+         :ok <-
+           register_task_paths(owner_project, task) do
+      :ok
+    else
+      {:error, reason} ->
+        {:ok, _task} =
+          Tasks.update_status(
+            task,
+            "error",
+            "resource ownership registration failed: #{inspect(reason)}"
+          )
+
+        raise "resource ownership registration failed: #{inspect(reason)}"
+    end
+  end
+
+  defp register_task_paths(owner_project, task) do
+    [
+      {"worktree_path", task.worktree_path, "JX task worktree path"},
+      {"task_dir", task.task_dir, "JX task metadata directory"},
+      {"log_path", task.log_path, "JX task log path"}
+    ]
+    |> Enum.reduce_while(:ok, fn {type, path, reason}, :ok ->
+      result =
+        register_resource(
+          %{
+            owner_project: owner_project,
+            execution_id: task.task_id,
+            resource_type: type,
+            resource_name: task.task_id,
+            resource_path: path,
+            reason: reason,
+            metadata: Jason.encode!(%{task_id: task.task_id, project: owner_project})
+          },
+          :temp_path
+        )
+
+      case result do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp register_resource(attrs, :tmux_session) do
+    case resource_ownerships().register_tmux_session(attrs) do
+      {:ok, _resource} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp register_resource(attrs, :temp_path) do
+    case resource_ownerships().register_temp_path(attrs) do
+      {:ok, _resource} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp resource_ownerships do
+    Application.get_env(:jx, :resource_ownerships, ResourceOwnerships)
   end
 
   defp create_resume_adopted_task(project, session, prompt, agent_name, resume_id, resume_cwd) do

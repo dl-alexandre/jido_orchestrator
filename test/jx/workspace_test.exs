@@ -17,6 +17,7 @@ defmodule JX.WorkspaceTest do
   alias JX.RepoDoctor
   alias JX.RemoteSessions.RemoteSessionObservation
   alias JX.RemoteSessions
+  alias JX.ResourceOwnerships.Resource
   alias JX.Notifications.Notification
   alias JX.SessionControls.SessionControl
   alias JX.SessionObservations.SessionObservation
@@ -27,7 +28,23 @@ defmodule JX.WorkspaceTest do
   alias JX.WakeTriggers.WakeTrigger
   alias JX.Workspace
 
+  defmodule FailingResourceOwnerships do
+    def register_tmux_session(_attrs), do: {:error, :forced_registry_failure}
+    def register_temp_path(_attrs), do: {:error, :forced_registry_failure}
+  end
+
   setup do
+    original_resource_ownerships = Application.get_env(:jx, :resource_ownerships)
+    Application.delete_env(:jx, :resource_ownerships)
+
+    on_exit(fn ->
+      if original_resource_ownerships do
+        Application.put_env(:jx, :resource_ownerships, original_resource_ownerships)
+      else
+        Application.delete_env(:jx, :resource_ownerships)
+      end
+    end)
+
     Repo.delete_all(WakeTrigger)
     Repo.delete_all(SessionObservation)
     Repo.delete_all(Cursor)
@@ -45,6 +62,7 @@ defmodule JX.WorkspaceTest do
     Repo.delete_all(SessionWatch)
     Repo.delete_all(SessionControl)
     Repo.delete_all(Directive)
+    Repo.delete_all(Resource)
     Repo.delete_all(Task)
     Repo.delete_all(Project)
     Repo.delete_all(Host)
@@ -79,6 +97,15 @@ defmodule JX.WorkspaceTest do
              "'claude' -p --dangerously-skip-permissions < '/srv/agent/projects/saysure/.jx/tasks/#{task1.task_id}/prompt.md'"
 
     assert Repo.aggregate(Task, :count) == 1
+    assert Repo.get_by(Resource, resource_type: "tmux_session", resource_name: task1.session_name)
+
+    assert Repo.get_by(Resource,
+             resource_type: "worktree_path",
+             resource_path: task1.worktree_path
+           )
+
+    assert Repo.get_by(Resource, resource_type: "task_dir", resource_path: task1.task_dir)
+    assert Repo.get_by(Resource, resource_type: "log_path", resource_path: task1.log_path)
 
     assert_received {:ssh_script, script}
     assert script =~ "git -C \"$repo\" worktree add -B \"$branch\" \"$worktree\" HEAD"
@@ -87,6 +114,17 @@ defmodule JX.WorkspaceTest do
     assert script =~ "send-keys -t \"$target_pane\""
     assert script =~ "cat > \"$launch_script\""
     assert script =~ "exit_status"
+  end
+
+  test "assign_task marks task degraded and fails when resource registration fails" do
+    Application.put_env(:jx, :resource_ownerships, FailingResourceOwnerships)
+
+    assert_raise RuntimeError, ~r/resource ownership registration failed/, fn ->
+      Workspace.assign_task("saysure", "resource registration failure")
+    end
+
+    assert %Task{status: "error", last_error: error} = Repo.one(Task)
+    assert error =~ "resource ownership registration failed"
   end
 
   test "assign_task records supported agent names in deterministic session names" do

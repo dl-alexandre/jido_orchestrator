@@ -71,7 +71,10 @@ jobs:
         run: mix docs
 
       - name: Build OTP release
-        run: MIX_ENV=prod mix release
+        env:
+          BURRITO_BUILD: ""
+          MIX_ENV: prod
+        run: mix release
 
       - name: Package release tarball
         run: |

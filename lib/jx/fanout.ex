@@ -111,6 +111,7 @@ defmodule JX.Fanout do
       "expected_head",
       "fresh_worktree",
       "assigned_branch",
+      "base_branch_matches",
       "validation_prefix_known",
       "mix_version_passes",
       "hook_health_passes",
@@ -431,7 +432,7 @@ defmodule JX.Fanout do
     %RunManifest{
       run_id: run_id,
       plan_id: plan_id,
-      repo: "example-project",
+      repo: opts[:repo] || "example-project",
       baseline: baseline,
       base_branch: opts[:base_branch] || "develop",
       created_at: created_at,
@@ -479,9 +480,9 @@ defmodule JX.Fanout do
     [
       %{
         id: "auth-api-security",
-        host: "build-1",
-        base_path: "/Users/user-a/Documents/GitHub/example-project",
-        worktree_path: "/Users/user-a/Documents/GitHub/worktrees/test-coverage-auth-api-security",
+        host: "milcmini",
+        base_path: "~/Documents/GitHub/OneBackend-v3",
+        worktree_path: "~/Documents/GitHub/worktrees/test-coverage-auth-api-security",
         branch: "test/auth-api-security-coverage",
         validation_prefix: "mise exec --",
         title: "test: expand auth and API security coverage",
@@ -505,8 +506,8 @@ defmodule JX.Fanout do
       %{
         id: "liveview-ui",
         host: "optiplex-xe2-local",
-        base_path: "/home/user-a/Work/example-project",
-        worktree_path: "/home/user-a/Work/worktrees/test-coverage-liveview-ui",
+        base_path: "~/OneBackend-v3",
+        worktree_path: "~/worktrees/test-coverage-liveview-ui",
         branch: "test/liveview-ui-coverage",
         validation_prefix: "mise exec --",
         title: "test: expand LiveView interaction coverage",
@@ -527,9 +528,9 @@ defmodule JX.Fanout do
       },
       %{
         id: "oban-audit",
-        host: "laptop-1",
-        base_path: "/home/user-b/Work/example-project",
-        worktree_path: "/home/user-b/Work/worktrees/test-coverage-oban-audit",
+        host: "ideapad",
+        base_path: "~/OneBackend-v3",
+        worktree_path: "~/worktrees/test-coverage-oban-audit",
         branch: "test/oban-audit-coverage",
         validation_prefix: "mise exec --",
         title: "test: expand background job and audit coverage",
@@ -552,9 +553,9 @@ defmodule JX.Fanout do
       },
       %{
         id: "reports-export",
-        host: "uitestserver",
-        base_path: "/home/developer/example-project",
-        worktree_path: "/home/developer/worktrees/test-coverage-reports-export",
+        host: "testserver",
+        base_path: "~/OneBackend-v3",
+        worktree_path: "~/worktrees/test-coverage-reports-export",
         branch: "test/reports-export-coverage",
         validation_prefix: "docker compose run --rm app",
         title: "test: expand reports and export coverage",
@@ -974,7 +975,7 @@ defmodule JX.Fanout do
       state: "planned",
       excluded: false,
       intent: %{
-        repo: "example-project",
+        repo: attrs[:repo] || "example-project",
         base_branch: base_branch,
         baseline: baseline,
         branch: attrs.branch,
@@ -1359,15 +1360,26 @@ defmodule JX.Fanout do
 
           :ok = write_assignment!(run_path, updated)
 
-          {:ok,
-           %{
-             assignment_id: assignment["assignment_id"],
-             state: "launching",
-             agent_id: launch["agent_id"],
-             session_name: launch["session_name"],
-             assignment_start_commit: launch["assignment_start_commit"],
-             goal_status: launch["goal_status"]
-           }}
+          with :ok <- register_fanout_resources(manifest, assignment, launch, opts) do
+            {:ok,
+             %{
+               assignment_id: assignment["assignment_id"],
+               state: "launching",
+               agent_id: launch["agent_id"],
+               session_name: launch["session_name"],
+               assignment_start_commit: launch["assignment_start_commit"],
+               goal_status: launch["goal_status"]
+             }}
+          else
+            {:error, reason} ->
+              {:error,
+               %{
+                 assignment_id: assignment["assignment_id"],
+                 reason: "resource_ownership_registration_failed",
+                 detail: inspect(reason),
+                 output: output
+               }}
+          end
         else
           {:error,
            %{
@@ -1390,6 +1402,93 @@ defmodule JX.Fanout do
     end
   end
 
+  defp register_fanout_resources(manifest, assignment, launch, opts) do
+    env = assignment["resolved_environment"] || %{}
+    run_id = manifest["run_id"]
+    assignment_id = assignment["assignment_id"]
+    owner_project = "fanout:#{run_id}"
+    session_name = launch["session_name"] || fanout_session_name(run_id, assignment_id)
+    tmux_server = opts[:tmux_server] || "jx"
+    worktree_path = env["worktree_path"]
+    goal_path = launch["goal_path"]
+    goal_dir = if is_binary(goal_path), do: Path.dirname(goal_path), else: nil
+    metadata = fanout_resource_metadata(manifest, assignment, launch)
+
+    [
+      {:temp_path,
+       %{
+         owner_project: owner_project,
+         assignment_id: assignment_id,
+         execution_id: session_name,
+         resource_type: "worktree_path",
+         resource_name: "#{run_id}:#{assignment_id}:worktree",
+         resource_path: worktree_path,
+         reason: "fanout assignment worktree",
+         metadata: metadata
+       }},
+      {:temp_path,
+       %{
+         owner_project: owner_project,
+         assignment_id: assignment_id,
+         execution_id: session_name,
+         resource_type: "temp_path",
+         resource_name: "#{run_id}:#{assignment_id}:goal_dir",
+         resource_path: goal_dir,
+         reason: "fanout assignment goal directory",
+         metadata: metadata
+       }},
+      {:tmux_session,
+       %{
+         owner_project: owner_project,
+         assignment_id: assignment_id,
+         execution_id: session_name,
+         resource_name: session_name,
+         tmux_server: tmux_server,
+         reason: "fanout assignment tmux session",
+         metadata: metadata
+       }}
+    ]
+    |> Enum.reject(fn
+      {_kind, %{resource_name: name}} when name in [nil, ""] -> true
+      {:temp_path, attrs} -> Map.get(attrs, :resource_path) == nil
+      _other -> false
+    end)
+    |> Enum.reduce_while(:ok, fn {kind, attrs}, :ok ->
+      case register_fanout_resource(kind, attrs) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp register_fanout_resource(:tmux_session, attrs) do
+    case resource_ownerships().register_tmux_session(attrs) do
+      {:ok, _resource} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp register_fanout_resource(:temp_path, attrs) do
+    case resource_ownerships().register_temp_path(attrs) do
+      {:ok, _resource} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fanout_resource_metadata(manifest, assignment, launch) do
+    Jason.encode!(%{
+      run_id: manifest["run_id"],
+      assignment_id: assignment["assignment_id"],
+      repo: manifest["repo"],
+      agent_id: launch["agent_id"],
+      session_name: launch["session_name"]
+    })
+  end
+
+  defp resource_ownerships do
+    Application.get_env(:jx, :resource_ownerships, JX.ResourceOwnerships)
+  end
+
   defp launch_script(manifest, assignment, launched_at, lease_timeout, opts) do
     env = assignment["resolved_environment"] || %{}
     intent = assignment["intent"] || %{}
@@ -1400,7 +1499,8 @@ defmodule JX.Fanout do
     branch = intent["branch"]
     baseline = manifest["baseline"] || intent["baseline"]
     objective = intent["task_objective"] || ""
-    codex_bin = opts[:codex_bin] || "codex"
+    agent_name = opts[:agent] || "codex"
+    agent_bin = opts[:agent_bin] || agent_binary(agent_name)
     tmux_server = opts[:tmux_server] || "jx"
     session_name = fanout_session_name(run_id, assignment_id)
     goal_dir = Path.join([worktree_path, ".jx", "fanout", run_id, assignment_id])
@@ -1408,8 +1508,8 @@ defmodule JX.Fanout do
     prompt_path = Path.join(goal_dir, "prompt.md")
     goal_status_path = Path.join(goal_dir, "goal_status.json")
     goal_completion_path = Path.join(goal_dir, "goal_completion.json")
-    agent_script_path = Path.join(goal_dir, "launch_codex_goal.sh")
-    agent_id = fanout_agent_id(manifest, assignment)
+    agent_script_path = Path.join(goal_dir, "launch_agent_goal.sh")
+    agent_id = fanout_agent_id(manifest, assignment, agent_name)
 
     requested_status =
       Jason.encode!(%{
@@ -1420,16 +1520,14 @@ defmodule JX.Fanout do
         prompt_path: prompt_path
       })
 
-    codex_command =
-      [
-        JX.Shell.quote(codex_bin),
-        "--enable goals",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--no-alt-screen",
-        "-C #{JX.Shell.quote(worktree_path)}",
-        "--goal #{JX.Shell.quote(goal_path)}"
-      ]
-      |> Enum.join(" ")
+    agent_command =
+      build_agent_command(
+        agent_name,
+        agent_bin,
+        worktree_path: worktree_path,
+        goal_path: goal_path,
+        prompt_path: prompt_path
+      )
 
     """
     set -eu
@@ -1484,10 +1582,10 @@ defmodule JX.Fanout do
     printf 'JX_LAUNCH\\tgoal_requested_at\\t%s\\n' #{JX.Shell.quote(launched_at)}
     printf 'JX_LAUNCH\\tlease_timeout_seconds\\t%s\\n' #{JX.Shell.quote(lease_timeout)}
 
-    cat > "$agent_script_path" <<'JX_CODEX_GOAL'
+    cat > "$agent_script_path" <<'JX_AGENT_GOAL'
     #!/bin/sh
     set +e
-    #{codex_command}
+    #{agent_command}
     status=$?
     completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [ "$status" -eq 0 ]; then goal_state=completed; else goal_state=failed; fi
@@ -1875,8 +1973,8 @@ defmodule JX.Fanout do
   defp command_output(output) when is_binary(output), do: output
   defp command_output(reason), do: inspect(reason)
 
-  defp fanout_agent_id(manifest, assignment) do
-    "codex-#{manifest["run_id"]}-#{assignment["assignment_id"]}"
+  defp fanout_agent_id(manifest, assignment, agent_name \\ "codex") do
+    "#{agent_name}-#{manifest["run_id"]}-#{assignment["assignment_id"]}"
   end
 
   defp fanout_session_name(run_id, assignment_id) do
@@ -1889,15 +1987,49 @@ defmodule JX.Fanout do
     |> String.replace(~r/[^A-Za-z0-9_]/, "_")
   end
 
+  defp agent_binary(agent_name) do
+    binaries = Application.get_env(:jx, :agent_binaries, %{})
+    Map.get(binaries, agent_name, agent_name)
+  end
+
+  defp build_agent_command(agent_name, agent_bin, bindings) do
+    commands = Application.get_env(:jx, :agent_commands, %{})
+    command_template = Map.get(commands, agent_name, default_agent_command(agent_name))
+
+    command_template
+    |> String.replace("{{agent_bin}}", JX.Shell.quote(agent_bin))
+    |> String.replace("{{worktree_path}}", JX.Shell.quote(bindings[:worktree_path] || ""))
+    |> String.replace("{{prompt_path}}", JX.Shell.quote(bindings[:prompt_path] || ""))
+    |> String.replace("{{goal_path}}", JX.Shell.quote(bindings[:goal_path] || ""))
+  end
+
+  defp default_agent_command("codex") do
+    "{{agent_bin}} exec --dangerously-bypass-approvals-and-sandbox -C {{worktree_path}} --goal {{goal_path}}"
+  end
+
+  defp default_agent_command("claude") do
+    "{{agent_bin}} -p --dangerously-skip-permissions < {{prompt_path}}"
+  end
+
+  defp default_agent_command("opencode") do
+    "{{agent_bin}} run --dir {{worktree_path}} --dangerously-skip-permissions \"Read the attached prompt file and complete the task.\" --file {{prompt_path}}"
+  end
+
+  defp default_agent_command(_agent_name) do
+    "{{agent_bin}} < {{prompt_path}}"
+  end
+
   defp agent_prompt_text(manifest, assignment) do
     intent = assignment["intent"] || %{}
     scope = intent["scope"] || %{}
+    run_id = manifest["run_id"]
+    assignment_id = assignment["assignment_id"]
 
     """
     You are working under jx fanout control.
 
-    Run: #{manifest["run_id"]}
-    Assignment: #{assignment["assignment_id"]}
+    Run: #{run_id}
+    Assignment: #{assignment_id}
     Branch: #{intent["branch"]}
     Baseline: #{manifest["baseline"]}
 
@@ -1909,6 +2041,14 @@ defmodule JX.Fanout do
 
     Forbidden paths:
     #{Enum.map_join(normalize_list(scope["forbidden"]), "\n", &"- #{&1}")}
+
+    ## Reporting
+
+    Submit status updates back to jx with:
+
+      jx fanout report #{run_id} --assignment-id #{assignment_id} --report-id <id> --agent-id <id> --sequence <n> --state <state> [--previous-report-id <id>] [--data <json>]
+
+    Valid states: #{Enum.join(@agent_states, ", ")}
     """
   end
 

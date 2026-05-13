@@ -8,6 +8,7 @@ defmodule JX.OrchestratorDaemon do
   """
 
   alias JX.Shell
+  alias JX.ResourceOwnerships
   alias JX.Tmux
 
   @default_session_name "jx-orchestrator"
@@ -35,6 +36,7 @@ defmodule JX.OrchestratorDaemon do
          {:ok, current} <- status(daemon),
          :ok <- maybe_replace_existing(current, daemon),
          {:ok, _started} <- start_tmux_session(daemon),
+         :ok <- register_daemon_resource(daemon),
          {:ok, started} <- status(daemon) do
       {:ok, Map.merge(started, %{started: true, command: loop_command(daemon)})}
     end
@@ -229,6 +231,41 @@ defmodule JX.OrchestratorDaemon do
       {_output, 0} -> {:ok, :started}
       {output, status} -> {:error, {:orchestrator_tmux_failed, status, String.trim(output)}}
     end
+  end
+
+  defp register_daemon_resource(daemon) do
+    attrs = %{
+      owner_type: "orchestrator_daemon",
+      owner_project: daemon.consumer || "orchestrator",
+      resource_type: "tmux_session",
+      resource_name: daemon.session_name,
+      tmux_server: daemon.tmux_server,
+      cleanup_policy: "kill_tmux_session",
+      reason: "orchestrator daemon tmux session",
+      metadata:
+        Jason.encode!(%{
+          purpose: "run jx orchestrate loop",
+          consumer: daemon.consumer,
+          host_name: daemon.host_name,
+          workspace: daemon.cwd,
+          log_path: daemon.log_path,
+          db_path: daemon.db_path,
+          cli_path: daemon.cli_path
+        })
+    }
+
+    case resource_ownerships().register_tmux_session(attrs) do
+      {:ok, _resource} ->
+        :ok
+
+      {:error, reason} ->
+        _ = tmux(daemon, ["kill-session", "-t", Tmux.target(daemon.session_name)])
+        {:error, {:orchestrator_resource_registration_failed, reason}}
+    end
+  end
+
+  defp resource_ownerships do
+    Application.get_env(:jx, :resource_ownerships, ResourceOwnerships)
   end
 
   defp running_status(daemon) do

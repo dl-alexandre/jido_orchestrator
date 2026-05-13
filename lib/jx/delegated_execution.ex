@@ -16,6 +16,7 @@ defmodule JX.DelegatedExecution do
   alias JX.OperationalLeases.Lease
   alias JX.OrchestrationActions.OrchestrationAction
   alias JX.Repo
+  alias JX.ResourceOwnerships
   alias JX.SafeActions
   alias JX.SafeActions.Audit
 
@@ -798,9 +799,33 @@ defmodule JX.DelegatedExecution do
           |> Repo.insert()
           |> unwrap_insert()
 
-        _ = record_runner_session(session, "runner_session.created")
-        {:ok, session}
+        with {:ok, _resource} <- register_runner_session_resource(session, runner) do
+          _ = record_runner_session(session, "runner_session.created")
+          {:ok, session}
+        end
     end
+  end
+
+  defp register_runner_session_resource(%RunnerSession{} = session, %Runner{} = runner) do
+    resource_ownerships().register_tmux_session(%{
+      owner_project: session.workspace_id,
+      assignment_id: session.assignment_id,
+      execution_id: session.session_id,
+      resource_name: session.tmux_session_name,
+      tmux_server: session.tmux_server,
+      reason: "delegated runner session",
+      metadata:
+        encode_json(%{
+          runner_id: runner.runner_id,
+          agent_id: runner.agent_id,
+          host_name: runner.host_name,
+          session_id: session.session_id
+        })
+    })
+  end
+
+  defp resource_ownerships do
+    Application.get_env(:jx, :resource_ownerships, ResourceOwnerships)
   end
 
   defp update_owned_runner_session(session_id, runner_id, kind, opts, update_fun) do

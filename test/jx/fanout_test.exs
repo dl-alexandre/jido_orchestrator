@@ -1,9 +1,13 @@
 defmodule JX.FanoutTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias JX.Fanout
+  alias JX.Repo
+  alias JX.ResourceOwnerships.Resource
 
   setup do
+    Repo.delete_all(Resource)
+
     root =
       Path.join(
         System.tmp_dir!(),
@@ -97,7 +101,7 @@ defmodule JX.FanoutTest do
     assert assignment["state"] == "planned"
     assert assignment["excluded"] == false
     assert assignment["intent"]["branch"] == "test/auth-api-security-coverage"
-    assert assignment["resolved_environment"]["host"] == "build-1"
+    assert assignment["resolved_environment"]["host"] == "milcmini"
     assert assignment["resolved_environment"]["assignment_start_commit"] == nil
 
     assert File.dir?(Path.join([result.run_path, "reports", "auth-api-security", "accepted"]))
@@ -189,7 +193,7 @@ defmodule JX.FanoutTest do
     parent = self()
 
     runner = fn assignment, script ->
-      assert script =~ "--goal"
+      assert script =~ "--dangerously-bypass-approvals-and-sandbox"
       assert script =~ "goal_status.json"
       assert script =~ "goal_completion.json"
       assert script =~ "worktree add -B \"$branch\" \"$worktree\" \"$baseline\""
@@ -220,6 +224,26 @@ defmodule JX.FanoutTest do
     assert assignment["launch"]["goal_objective"] =~ "Expand coverage"
     assert assignment["launch"]["goal_status_path"] == "/tmp/goal_status.json"
     assert assignment["resolved_environment"]["assignment_start_commit"] == "53907e03"
+
+    assert Repo.get_by(Resource,
+             owner_project: "fanout:test-coverage-launch",
+             assignment_id: "auth-api-security",
+             resource_type: "tmux_session",
+             resource_name: "jx_fanout_test"
+           )
+
+    assert Repo.get_by(Resource,
+             owner_project: "fanout:test-coverage-launch",
+             assignment_id: "auth-api-security",
+             resource_type: "worktree_path"
+           )
+
+    assert Repo.get_by(Resource,
+             owner_project: "fanout:test-coverage-launch",
+             assignment_id: "auth-api-security",
+             resource_type: "temp_path",
+             resource_path: "/tmp"
+           )
   end
 
   test "ownership check rejects forbidden and outside-scope diffs", %{root: root} do
@@ -467,7 +491,7 @@ defmodule JX.FanoutTest do
              Enum.find(preflight.assignments, &(&1.assignment_id == "auth-api-security"))
 
     one_arg_runner = fn script ->
-      assert script =~ "launch_codex_goal.sh"
+      assert script =~ "launch_agent_goal.sh"
 
       {:ok,
        """
@@ -796,6 +820,7 @@ defmodule JX.FanoutTest do
       "expected_head",
       "fresh_worktree",
       "assigned_branch",
+      "base_branch_matches",
       "validation_prefix_known",
       "mix_version_passes",
       "hook_health_passes",

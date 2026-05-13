@@ -9,6 +9,7 @@ defmodule JX.CLI do
   alias JX.CLI.Agents, as: AgentsCLI
   alias JX.CLI.Approvals, as: ApprovalsCLI
   alias JX.CLI.Assignments, as: AssignmentsCLI
+  alias JX.CLI.Cleanup, as: CleanupCLI
   alias JX.CLI.Dashboard, as: DashboardCLI
   alias JX.CLI.DevIDE, as: DevIDECLI
   alias JX.CLI.Events, as: EventsCLI
@@ -17,6 +18,7 @@ defmodule JX.CLI do
   alias JX.CLI.Leases, as: LeasesCLI
   alias JX.CLI.Monitor, as: MonitorCLI
   alias JX.CLI.Orchestrate, as: OrchestrateCLI
+  alias JX.CLI.Orchestrator, as: OrchestratorCLI
   alias JX.CLI.Project, as: ProjectCLI
   alias JX.CLI.Queue, as: QueueCLI
   alias JX.CLI.Runners, as: RunnersCLI
@@ -75,6 +77,8 @@ defmodule JX.CLI do
   end
 
   defp dispatch(["devide" | _rest] = args), do: dispatch_devide(args)
+
+  defp dispatch(["cleanup" | args]), do: CleanupCLI.run(args, start_app: &start_app/0)
 
   defp dispatch(["host" | args]), do: HostCLI.run(args, start_app: &start_app/0)
 
@@ -1496,320 +1500,8 @@ defmodule JX.CLI do
     end
   end
 
-  defp dispatch(["orchestrator", "start" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          session: :string,
-          server: :string,
-          log: :string,
-          replace: :boolean,
-          dry_run: :boolean,
-          consumer: :string,
-          host: :string,
-          managed: :boolean,
-          all_processes: :boolean,
-          type: :string,
-          ssh_target: :string,
-          work_state: :string,
-          control: :string,
-          prompt_status: :string,
-          observe: :boolean,
-          lines: :integer,
-          scan_limit: :integer,
-          queue_limit: :integer,
-          event_limit: :integer,
-          decision_limit: :integer,
-          min_observe_age_seconds: :integer,
-          interval_ms: :integer,
-          execute: :boolean,
-          yes: :boolean,
-          ack: :boolean,
-          auto_plan: :boolean,
-          no_enter: :boolean,
-          json: :boolean
-        ]
-      )
-
-    lines = opts[:lines] || 160
-    scan_limit = opts[:scan_limit] || 100
-    queue_limit = opts[:queue_limit] || 10
-    event_limit = opts[:event_limit] || 50
-    decision_limit = opts[:decision_limit] || 20
-    min_observe_age_seconds = opts[:min_observe_age_seconds] || 15
-    interval_ms = opts[:interval_ms] || 15_000
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         :ok <- validate_tmux_server(server),
-         :ok <- validate_optional_session_type(opts[:type]),
-         :ok <- validate_optional_work_state(opts[:work_state]),
-         :ok <- validate_optional_work_board_control(opts[:control]),
-         :ok <- validate_optional_prompt_status(opts[:prompt_status]),
-         :ok <- validate_positive("lines", lines),
-         :ok <- validate_positive("scan-limit", scan_limit),
-         :ok <- validate_positive("queue-limit", queue_limit),
-         :ok <- validate_positive("event-limit", event_limit),
-         :ok <- validate_positive("decision-limit", decision_limit),
-         :ok <- validate_non_negative("min-observe-age-seconds", min_observe_age_seconds),
-         :ok <- validate_positive("interval-ms", interval_ms),
-         :ok <- start_app(),
-         {:ok, status} <-
-           OrchestratorDaemon.start(
-             orchestrator_daemon_opts(opts,
-               server: server,
-               lines: lines,
-               scan_limit: scan_limit,
-               queue_limit: queue_limit,
-               event_limit: event_limit,
-               decision_limit: decision_limit,
-               min_observe_age_seconds: min_observe_age_seconds,
-               interval_ms: interval_ms,
-               db_path: database_path()
-             )
-           ) do
-      print_orchestrator_daemon_status(status, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "status" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [session: :string, server: :string, log: :string, json: :boolean]
-      )
-
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         :ok <- validate_tmux_server(server),
-         {:ok, status} <-
-           OrchestratorDaemon.status(orchestrator_daemon_opts(opts, server: server)) do
-      print_orchestrator_daemon_status(status, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "stop" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [session: :string, server: :string, log: :string, json: :boolean]
-      )
-
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         :ok <- validate_tmux_server(server),
-         {:ok, status} <- OrchestratorDaemon.stop(orchestrator_daemon_opts(opts, server: server)) do
-      print_orchestrator_daemon_status(status, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "logs" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [session: :string, server: :string, log: :string, n: :integer, json: :boolean],
-        aliases: [n: :n]
-      )
-
-    lines = opts[:n] || 80
-    server = opts[:server] || Tmux.managed_server()
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         :ok <- validate_tmux_server(server),
-         :ok <- validate_positive("n", lines),
-         {:ok, log} <-
-           OrchestratorDaemon.logs(orchestrator_daemon_opts(opts, server: server, lines: lines)) do
-      if opts[:json] do
-        print_json(log)
-      else
-        IO.write(log.output)
-        if log.output != "" and not String.ends_with?(log.output, "\n"), do: IO.puts("")
-      end
-
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "heartbeats" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [consumer: :string, status: :string, n: :integer, json: :boolean],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 20
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx orchestrator heartbeats [--consumer <name>] [--status running|idle|error|stopped] [-n 20] [--json]"
-           ),
-         :ok <- validate_optional_heartbeat_status(opts[:status]),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.list_orchestrator_heartbeats(
-        consumer: opts[:consumer],
-        status: opts[:status],
-        limit: limit
-      )
-      |> print_orchestrator_heartbeats(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "health" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          consumer: :string,
-          status: :string,
-          stale_after_seconds: :integer,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    limit = opts[:n] || 20
-    stale_after_seconds = opts[:stale_after_seconds] || 120
-
-    with :ok <- validate_options(invalid),
-         :ok <-
-           expect_no_args(
-             rest,
-             "jx orchestrator health [--consumer <name>] [--status running|idle|error|stopped] [--stale-after-seconds 120] [-n 20] [--json]"
-           ),
-         :ok <- validate_optional_heartbeat_status(opts[:status]),
-         :ok <- validate_positive("stale-after-seconds", stale_after_seconds),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app() do
-      Workspace.orchestrator_health(
-        consumer: opts[:consumer],
-        status: opts[:status],
-        stale_after_seconds: stale_after_seconds,
-        limit: limit
-      )
-      |> print_orchestrator_health(json: opts[:json] || false)
-
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "inbox" | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          host: :string,
-          project: :string,
-          managed: :boolean,
-          all_processes: :boolean,
-          type: :string,
-          ssh_target: :string,
-          work_state: :string,
-          control: :string,
-          observe: :boolean,
-          lines: :integer,
-          scan_limit: :integer,
-          n: :integer,
-          json: :boolean
-        ],
-        aliases: [n: :n]
-      )
-
-    lines = opts[:lines] || 160
-    limit = opts[:n] || 20
-    scan_limit = opts[:scan_limit] || 100
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         :ok <- validate_optional_session_type(opts[:type]),
-         :ok <- validate_optional_work_state(opts[:work_state]),
-         :ok <- validate_optional_work_board_control(opts[:control]),
-         :ok <- validate_positive("lines", lines),
-         :ok <- validate_positive("scan-limit", scan_limit),
-         :ok <- validate_positive("n", limit),
-         :ok <- start_app(),
-         {:ok, inbox} <-
-           Workspace.orchestrator_inbox(
-             host_name: opts[:host],
-             all_tmux: !opts[:managed],
-             all_processes: opts[:all_processes] || false,
-             type: opts[:type],
-             ssh_target: opts[:ssh_target],
-             work_state: opts[:work_state],
-             control_mode: opts[:control],
-             observe: Keyword.get(opts, :observe, true),
-             lines: lines,
-             scan_limit: scan_limit,
-             limit: limit
-           ) do
-      print_orchestrator_inbox(inbox, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "review", ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          observe: :boolean,
-          lines: :integer,
-          json: :boolean
-        ]
-      )
-
-    lines = opts[:lines] || 220
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         :ok <- validate_positive("lines", lines),
-         :ok <- start_app(),
-         {:ok, review} <-
-           Workspace.orchestrator_review(ref,
-             observe: Keyword.get(opts, :observe, true),
-             lines: lines
-           ) do
-      print_orchestrator_review(review, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator", "decide", ref | args]) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          prompt: :string,
-          ready: :boolean,
-          draft: :boolean,
-          hold: :string,
-          clear: :boolean,
-          ignore: :boolean,
-          protect: :boolean,
-          managed: :boolean,
-          note: :string,
-          json: :boolean
-        ]
-      )
-
-    with :ok <- validate_options(invalid),
-         :ok <- expect_no_args(rest, orchestrator_usage()),
-         {:ok, attrs} <- orchestrator_decide_attrs(opts),
-         :ok <- start_app(),
-         {:ok, result} <- Workspace.orchestrator_decide(ref, attrs) do
-      print_orchestrator_decision(result, json: opts[:json] || false)
-      :ok
-    end
-  end
-
-  defp dispatch(["orchestrator" | _args]), do: {:error, "usage: #{orchestrator_usage()}"}
+  defp dispatch(["orchestrator" | args]),
+    do: OrchestratorCLI.run(args, start_app: &start_app/0, database_path: &database_path/0)
 
   defp dispatch(["orchestrate" | args]), do: OrchestrateCLI.run(args, start_app: &start_app/0)
 
@@ -3063,10 +2755,6 @@ defmodule JX.CLI do
     |> Enum.join(" | ")
   end
 
-  defp orchestrator_usage do
-    "jx orchestrator start|status|stop|logs|health|heartbeats|inbox|review <ref>|decide <ref> [--prompt <text> --ready|--draft | --hold <reason> | --clear | --ignore | --protect | --managed] [--dry-run] [--session #{OrchestratorDaemon.default_session_name()}] [--server #{Tmux.managed_server()}] [--log <path>] [--json]"
-  end
-
   defp modes_usage do
     "jx modes [<mode>|playbook <mode>] [--json]"
   end
@@ -3110,153 +2798,6 @@ defmodule JX.CLI do
     "jx task send <task-id> \"<message>\" [--window 0] [--pane 0] [--no-enter]"
   end
 
-  defp orchestrator_decide_attrs(opts) do
-    actions =
-      [
-        prompt: opts[:prompt],
-        hold: opts[:hold],
-        clear: opts[:clear],
-        ignore: opts[:ignore],
-        protect: opts[:protect],
-        managed: opts[:managed]
-      ]
-      |> Enum.filter(fn
-        {_action, value} when is_binary(value) -> String.trim(value) != ""
-        {_action, value} -> value == true
-      end)
-
-    cond do
-      length(actions) != 1 ->
-        {:error,
-         "choose exactly one decision action: --prompt, --hold, --clear, --ignore, --protect, or --managed"}
-
-      opts[:ready] && opts[:draft] ->
-        {:error, "use either --ready or --draft, not both"}
-
-      true ->
-        {action, value} = hd(actions)
-        prompt_status = if opts[:draft], do: "draft", else: "ready"
-
-        attrs =
-          case action do
-            :prompt ->
-              %{action: "prompt", prompt: value, prompt_status: prompt_status}
-
-            :hold ->
-              %{action: "hold", reason: value}
-
-            action when action in [:clear, :ignore, :protect, :managed] ->
-              %{action: Atom.to_string(action)}
-          end
-
-        attrs =
-          if opts[:note] do
-            Map.put(attrs, :notes, opts[:note])
-          else
-            attrs
-          end
-
-        {:ok, attrs}
-    end
-  end
-
-  defp orchestrator_daemon_opts(opts, overrides) do
-    [
-      session_name: opts[:session],
-      tmux_server: overrides[:server],
-      log_path: opts[:log],
-      db_path: overrides[:db_path],
-      dry_run: opts[:dry_run] || false,
-      consumer: opts[:consumer],
-      host_name: opts[:host],
-      all_tmux: !opts[:managed],
-      all_processes: opts[:all_processes] || false,
-      type: opts[:type],
-      ssh_target: opts[:ssh_target],
-      work_state: opts[:work_state],
-      control_mode: opts[:control],
-      prompt_status: opts[:prompt_status],
-      observe: Keyword.get(opts, :observe, true),
-      lines: overrides[:lines],
-      scan_limit: overrides[:scan_limit],
-      queue_limit: overrides[:queue_limit],
-      event_limit: overrides[:event_limit],
-      decision_limit: overrides[:decision_limit],
-      min_observe_age_seconds: overrides[:min_observe_age_seconds],
-      interval_ms: overrides[:interval_ms],
-      execute: Keyword.get(opts, :execute, true),
-      yes: Keyword.get(opts, :yes, true),
-      ack: Keyword.get(opts, :ack, true),
-      auto_plan: Keyword.get(opts, :auto_plan, true),
-      enter: !opts[:no_enter],
-      replace: opts[:replace] || false
-    ]
-  end
-
-  defp print_orchestrator_daemon_status(status, opts) do
-    if opts[:json] do
-      print_json(status)
-    else
-      state = if status.running, do: "running", else: "stopped"
-
-      IO.puts("orchestrator #{state}")
-      IO.puts("session: #{status.session_name}")
-      IO.puts("server: #{status.tmux_server}")
-      IO.puts("log: #{status.log_path}")
-
-      if status[:command], do: IO.puts("command: #{status.command}")
-      if status[:pane_pid], do: IO.puts("pid: #{status.pane_pid}")
-      if status[:current_path], do: IO.puts("path: #{status.current_path}")
-    end
-  end
-
-  defp print_orchestrator_inbox(inbox, opts) do
-    if opts[:json] do
-      print_json(json_orchestrator_inbox(inbox))
-    else
-      IO.puts("orchestrator inbox")
-      IO.puts("generated: #{format_time(inbox.generated_at)}")
-
-      print_inbox_section("needs judgment", inbox.sections.needs_judgment)
-      print_inbox_delegation_reviews(Map.get(inbox.sections, :delegation_reviews, []))
-      print_recovery_recommendations(Map.get(inbox.sections, :recovery, %{}))
-      print_inbox_suggestions(inbox.sections.suggestions)
-      print_inbox_section("ready / chambered", inbox.sections.ready)
-      print_inbox_section("awaiting observation", inbox.sections.awaiting_observation)
-      print_inbox_section("recently completed", inbox.sections.recently_completed)
-
-      IO.puts("")
-      print_summary_counts("observation refresh", inbox.observation_refresh)
-
-      unless inbox.errors == [] do
-        IO.puts("")
-        print_summary_errors(inbox.errors)
-      end
-    end
-  end
-
-  defp print_inbox_section(_title, []), do: :ok
-
-  defp print_inbox_section(title, items) do
-    IO.puts("")
-    IO.puts(title)
-
-    rows =
-      Enum.map(items, fn item ->
-        [
-          item.ref,
-          item.project,
-          item.state,
-          item.prompt_status,
-          item.work_state,
-          truncate(item.next_step, 32),
-          truncate(item.actual, 72)
-        ]
-      end)
-
-    print_table(["REF", "PROJECT", "STATE", "PROMPT", "WORK", "NEXT", "ACTUAL"], rows)
-  end
-
   defp print_inbox_delegation_reviews([]), do: :ok
 
   defp print_inbox_delegation_reviews(reviews) do
@@ -3276,123 +2817,6 @@ defmodule JX.CLI do
       end)
 
     print_table(["ID", "DECISION", "REF", "PROJECT", "TITLE", "SUMMARY"], rows)
-  end
-
-  defp print_recovery_recommendations(%{recommendations: []}), do: :ok
-
-  defp print_recovery_recommendations(%{recommendations: recommendations}) do
-    IO.puts("")
-    IO.puts("recovery recommendations")
-
-    rows =
-      Enum.map(recommendations, fn recommendation ->
-        [
-          recommendation.action,
-          recommendation.safety,
-          recommendation.ref,
-          truncate(recommendation.target, 40),
-          truncate(recommendation.reason, 72),
-          truncate(Enum.join(recommendation.evidence, "; "), 72)
-        ]
-      end)
-
-    print_table(["ACTION", "SAFETY", "REF", "TARGET", "REASON", "EVIDENCE"], rows)
-  end
-
-  defp print_recovery_recommendations(_recovery), do: :ok
-
-  defp print_inbox_suggestions([]), do: :ok
-
-  defp print_inbox_suggestions(suggestions) do
-    IO.puts("")
-    IO.puts("planner suggestions")
-
-    rows =
-      Enum.map(suggestions, fn suggestion ->
-        [
-          suggestion.ref,
-          suggestion.project,
-          suggestion.safety,
-          suggestion.prompt_status,
-          truncate(suggestion.reason, 40),
-          truncate(suggestion.prompt, 96)
-        ]
-      end)
-
-    print_table(["REF", "PROJECT", "SAFETY", "PROMPT", "REASON", "PLAN"], rows)
-  end
-
-  defp print_orchestrator_review(review, opts) do
-    if opts[:json] do
-      print_json(json_orchestrator_review(review))
-    else
-      profile = review.profile
-      recommendation = review.recommendation
-
-      IO.puts("orchestrator review #{review.ref}")
-      IO.puts("generated: #{format_time(review.generated_at)}")
-      IO.puts("project: #{get_in(profile, [:session, :project]) || ""}")
-      IO.puts("state: #{get_in(profile, [:comparison, :state]) || ""}")
-      IO.puts("prompt: #{get_in(profile, [:next_prompt, :status]) || ""}")
-      IO.puts("work: #{get_in(profile, [:actual, :work_state]) || ""}")
-      IO.puts("actual: #{get_in(profile, [:comparison, :actual_summary]) || ""}")
-
-      if review.latest_observation do
-        IO.puts("")
-        IO.puts("latest observation")
-        print_summary_counts("observation", review.latest_observation)
-      end
-
-      IO.puts("")
-      IO.puts("recommendation")
-      IO.puts("type: #{recommendation.type}")
-      IO.puts("safety: #{recommendation.safety}")
-      IO.puts("reason: #{recommendation.reason}")
-
-      if String.trim(recommendation.prompt || "") != "" do
-        IO.puts("")
-        IO.puts("prompt")
-        IO.puts(recommendation.prompt)
-      end
-
-      print_review_evidence(recommendation.evidence || [])
-      print_review_commands(review.commands)
-
-      unless review.errors == [] do
-        IO.puts("")
-        print_summary_errors(review.errors)
-      end
-    end
-  end
-
-  defp print_review_evidence([]), do: :ok
-
-  defp print_review_evidence(evidence) do
-    IO.puts("")
-    IO.puts("evidence")
-    Enum.each(evidence, &IO.puts("- #{&1}"))
-  end
-
-  defp print_review_commands([]), do: :ok
-
-  defp print_review_commands(commands) do
-    IO.puts("")
-    IO.puts("commands")
-
-    rows =
-      Enum.map(commands, fn command ->
-        [command.action, command.command]
-      end)
-
-    print_table(["ACTION", "COMMAND"], rows)
-  end
-
-  defp print_orchestrator_decision(result, opts) do
-    if opts[:json] do
-      print_json(json_orchestrator_decision(result))
-    else
-      IO.puts("#{result.result_summary}: #{result.ref}")
-    end
   end
 
   defp run_tui_interactive(opts, state) do
@@ -3982,19 +3406,6 @@ defmodule JX.CLI do
     end
   end
 
-  defp validate_optional_heartbeat_status(nil), do: :ok
-
-  defp validate_optional_heartbeat_status(status) do
-    statuses = JX.OrchestratorHeartbeats.statuses()
-
-    if status in statuses do
-      :ok
-    else
-      {:error,
-       "unsupported heartbeat status #{inspect(status)}; expected one of: #{Enum.join(statuses, ", ")}"}
-    end
-  end
-
   defp validate_manage_policy("conservative"), do: :ok
 
   defp validate_manage_policy(policy),
@@ -4025,19 +3436,6 @@ defmodule JX.CLI do
   defp validate_optional_work_board_control("uncontrolled"), do: :ok
 
   defp validate_optional_work_board_control(mode), do: validate_session_control_mode(mode)
-
-  defp validate_optional_prompt_status(nil), do: :ok
-
-  defp validate_optional_prompt_status(status) do
-    statuses = JX.SessionProfiles.prompt_statuses()
-
-    if status in statuses do
-      :ok
-    else
-      {:error,
-       "unsupported prompt status #{inspect(status)}; expected one of: #{Enum.join(statuses, ", ")}"}
-    end
-  end
 
   defp validate_optional_watch_status(nil), do: :ok
 
@@ -5007,91 +4405,6 @@ defmodule JX.CLI do
         "dismissed #{result.dismissed} duplicate notification#{plural(result.dismissed)}; kept #{result.kept} unread notification#{plural(result.kept)} across #{result.duplicate_groups} duplicate group#{plural(result.duplicate_groups)}"
       )
     end
-  end
-
-  defp print_orchestrator_heartbeats([], opts) do
-    if opts[:json] do
-      print_json(%{heartbeats: []})
-    else
-      IO.puts("no orchestrator heartbeats")
-    end
-  end
-
-  defp print_orchestrator_heartbeats(heartbeats, opts) do
-    if opts[:json] do
-      print_json(%{heartbeats: Enum.map(heartbeats, &json_orchestrator_heartbeat/1)})
-    else
-      rows =
-        Enum.map(heartbeats, fn heartbeat ->
-          guidance = heartbeat_guidance(heartbeat)
-
-          [
-            heartbeat.daemon_key,
-            heartbeat.status,
-            heartbeat.consumer,
-            heartbeat.mode,
-            format_time(heartbeat.last_scan_at),
-            format_time(heartbeat.last_decision_at),
-            format_time(heartbeat.next_wake_at),
-            truncate(Map.get(guidance, "top_priority", ""), 56),
-            truncate(Enum.join(Map.get(guidance, "operator_needed_for", []), ","), 40),
-            truncate(heartbeat.last_error, 40)
-          ]
-        end)
-
-      print_table(
-        [
-          "KEY",
-          "STATUS",
-          "CONSUMER",
-          "MODE",
-          "SCAN",
-          "DECISION",
-          "NEXT",
-          "TOP",
-          "NEEDS",
-          "ERROR"
-        ],
-        rows
-      )
-    end
-  end
-
-  defp print_orchestrator_health(health, opts) do
-    if opts[:json] do
-      print_json(json_orchestrator_health(health))
-    else
-      IO.puts("orchestrator health: #{health.status}")
-      IO.puts("alerts: #{health.alerts_total}")
-      IO.puts("heartbeats: #{health.heartbeats_total}")
-
-      if health.alerts != [] do
-        IO.puts("")
-        print_orchestrator_health_alerts(health.alerts)
-      end
-
-      if health.heartbeats != [] do
-        IO.puts("")
-        print_orchestrator_heartbeats(health.heartbeats, json: false)
-      end
-    end
-  end
-
-  defp print_orchestrator_health_alerts(alerts) do
-    rows =
-      Enum.map(alerts, fn alert ->
-        [
-          Map.get(alert, :daemon_key, ""),
-          Map.get(alert, :severity, ""),
-          Map.get(alert, :reason, ""),
-          Map.get(alert, :status, ""),
-          format_time(Map.get(alert, :last_scan_at)),
-          format_time(Map.get(alert, :next_wake_at)),
-          truncate(Map.get(alert, :summary, ""), 80)
-        ]
-      end)
-
-    print_table(["KEY", "SEVERITY", "REASON", "STATUS", "SCAN", "NEXT", "SUMMARY"], rows)
   end
 
   defp print_session_controls([], opts) do
@@ -7273,45 +6586,6 @@ defmodule JX.CLI do
     }
   end
 
-  defp json_orchestrator_inbox(inbox) do
-    %{
-      generated_at: format_time(inbox.generated_at),
-      observed: inbox.observed,
-      observation_refresh: inbox.observation_refresh,
-      total: inbox.total,
-      sections: inbox.sections,
-      errors: Enum.map(inbox.errors, &json_error/1)
-    }
-  end
-
-  defp json_orchestrator_review(review) do
-    %{
-      generated_at: format_time(review.generated_at),
-      ref: review.ref,
-      observed: review.observed,
-      observation_refresh: review.observation_refresh,
-      profile: review.profile,
-      latest_observation: json_latest_observation(review.latest_observation),
-      recommendation: review.recommendation,
-      commands: review.commands,
-      errors: Enum.map(review.errors, &json_error/1)
-    }
-  end
-
-  defp json_latest_observation(nil), do: nil
-
-  defp json_latest_observation(observation) do
-    Map.update!(observation, :inserted_at, &format_time/1)
-  end
-
-  defp json_orchestrator_decision(result) do
-    %{
-      ref: result.ref,
-      action: result.action,
-      result_summary: result.result_summary
-    }
-  end
-
   defp json_monitor_event(event) do
     %{
       id: event.id,
@@ -7450,63 +6724,6 @@ defmodule JX.CLI do
       inserted_at: format_time(delegation.inserted_at),
       updated_at: format_time(delegation.updated_at)
     }
-  end
-
-  defp json_orchestrator_heartbeat(heartbeat) do
-    snapshot = operation_execution_snapshot(heartbeat.scan_snapshot)
-
-    %{
-      daemon_key: heartbeat.daemon_key,
-      consumer: heartbeat.consumer,
-      session_name: heartbeat.session_name,
-      status: heartbeat.status,
-      mode: heartbeat.mode,
-      last_scan_at: format_time(heartbeat.last_scan_at),
-      last_decision_at: format_time(heartbeat.last_decision_at),
-      last_error: heartbeat.last_error,
-      next_wake_at: format_time(heartbeat.next_wake_at),
-      guidance: Map.get(snapshot, "guidance", %{}),
-      scan_snapshot: snapshot,
-      updated_at: format_time(heartbeat.updated_at)
-    }
-  end
-
-  defp json_orchestrator_health(health) do
-    %{
-      generated_at: format_time(health.generated_at),
-      status: health.status,
-      stale_after_seconds: health.stale_after_seconds,
-      heartbeats_total: health.heartbeats_total,
-      alerts_total: health.alerts_total,
-      alerts: Enum.map(health.alerts, &json_orchestrator_health_alert/1),
-      heartbeats: Enum.map(health.heartbeats, &json_orchestrator_heartbeat/1)
-    }
-  end
-
-  defp json_orchestrator_health_alert(alert) do
-    %{
-      kind: Map.get(alert, :kind, ""),
-      reason: Map.get(alert, :reason, ""),
-      severity: Map.get(alert, :severity, ""),
-      daemon_key: Map.get(alert, :daemon_key, ""),
-      consumer: Map.get(alert, :consumer, ""),
-      session_name: Map.get(alert, :session_name, ""),
-      status: Map.get(alert, :status, ""),
-      mode: Map.get(alert, :mode, ""),
-      last_scan_at: format_time(Map.get(alert, :last_scan_at)),
-      last_decision_at: format_time(Map.get(alert, :last_decision_at)),
-      last_error: Map.get(alert, :last_error, ""),
-      next_wake_at: format_time(Map.get(alert, :next_wake_at)),
-      overdue_seconds: Map.get(alert, :overdue_seconds),
-      summary: Map.get(alert, :summary, "")
-    }
-  end
-
-  defp heartbeat_guidance(heartbeat) do
-    case operation_execution_snapshot(heartbeat.scan_snapshot) do
-      %{"guidance" => guidance} -> guidance
-      _other -> %{}
-    end
   end
 
   defp json_session_control(control) do
@@ -8017,6 +7234,7 @@ defmodule JX.CLI do
       "runtimes" => RuntimesCLI.usage_lines(),
       "assignments" => AssignmentsCLI.usage_lines(),
       "call" => [call_usage()],
+      "cleanup" => CleanupCLI.usage_lines(),
       "ci" => [ci_usage()],
       "delegate" => [delegate_usage()],
       "dashboard" => DashboardCLI.usage_lines(),
@@ -8029,7 +7247,7 @@ defmodule JX.CLI do
       "meet" => [meet_usage()],
       "modes" => [modes_usage()],
       "monitor" =>
-        MonitorCLI.usage_lines() ++ OrchestrateCLI.usage_lines() ++ [orchestrator_usage()],
+        MonitorCLI.usage_lines() ++ OrchestrateCLI.usage_lines() ++ OrchestratorCLI.usage_lines(),
       "next" => [next_usage()],
       "notifications" => [
         "jx notifications ls [--status unread|acknowledged|dismissed] [--severity info|notice|warning|critical] [--ref <ref>] [--project <name>] [-n 50] [--json]",
@@ -8037,8 +7255,7 @@ defmodule JX.CLI do
         "jx notifications compact [--ref <ref>] [--project <name>] [--json]"
       ],
       "orchestrator" =>
-        [orchestrator_usage()] ++
-          OrchestrateCLI.usage_lines() ++ MonitorCLI.usage_lines(),
+        OrchestratorCLI.usage_lines() ++ OrchestrateCLI.usage_lines() ++ MonitorCLI.usage_lines(),
       "policy" => [
         "jx policy overview [--json]",
         "jx policy check <action> [--json]",

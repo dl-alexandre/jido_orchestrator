@@ -6,16 +6,17 @@ defmodule JX.CLI.Fanout do
   import JX.CLI.Support,
     only: [expect_no_args: 2, print_json: 1, print_table: 2, validate_options: 1]
 
-  @fanout_plan_usage "jx fanout plan <plan-id> --baseline <sha> [--base-branch <branch>] [--coverage-file <path> --host-count <n> --risk-rules <json-or-path>] [--host <name[=base,worktree_root,validation_prefix]>] [--root <dir>] [--run-id <id>] [--json]"
+  @fanout_plan_usage "jx fanout plan <plan-id> --baseline <sha> [--base-branch <branch>] [--repo <owner/repo>] [--coverage-file <path> --host-count <n> --risk-rules <json-or-path>] [--host <name[=base,worktree_root,validation_prefix]>] [--root <dir>] [--run-id <id>] [--json]"
   @fanout_preflight_usage "jx fanout preflight <run-id-or-path> [--root <dir>] [--ttl-seconds <n>] [--json]"
-  @fanout_launch_usage "jx fanout launch <run-id-or-path> [assignment-id|--all] [--root <dir>] [--lease-timeout-seconds <n>] [--codex-bin <path>] [--tmux-server <name>] [--json]"
+  @fanout_launch_usage "jx fanout launch <run-id-or-path> [assignment-id|--all] [--root <dir>] [--lease-timeout-seconds <n>] [--agent <claude|opencode|codex>] [--agent-bin <path>] [--codex-bin <path>] [--tmux-server <name>] [--json]"
   @fanout_monitor_usage "jx fanout monitor <run-id-or-path> [--root <dir>] [--json]"
   @fanout_ownership_usage "jx fanout ownership <run-id-or-path> <assignment-id> [--root <dir>] [--warn-only] [--json]"
   @fanout_pr_usage "jx fanout pr <run-id-or-path> <assignment-id> [--root <dir>] [--repo <owner/repo>] [--register-ci-watch] [--ci-watch-mode notify|hold|prompt] [--allow-unvalidated] [--json]"
+  @fanout_report_usage "jx fanout report <run-id-or-path> --assignment-id <id> --report-id <id> --agent-id <id> --sequence <n> --state <state> [--previous-report-id <id>] [--data <json>] [--root <dir>] [--json]"
   @fanout_status_usage "jx fanout status <run-id-or-path> [--root <dir>] [--json]"
 
   def usage do
-    "#{@fanout_plan_usage} | #{@fanout_preflight_usage} | #{@fanout_launch_usage} | #{@fanout_monitor_usage} | #{@fanout_ownership_usage} | #{@fanout_pr_usage} | #{@fanout_status_usage}"
+    "#{@fanout_plan_usage} | #{@fanout_preflight_usage} | #{@fanout_launch_usage} | #{@fanout_monitor_usage} | #{@fanout_ownership_usage} | #{@fanout_pr_usage} | #{@fanout_report_usage} | #{@fanout_status_usage}"
   end
 
   def run(["plan", plan_id | args], opts) do
@@ -24,6 +25,7 @@ defmodule JX.CLI.Fanout do
         strict: [
           baseline: :string,
           base_branch: :string,
+          repo: :string,
           root: :string,
           run_id: :string,
           coverage_file: :string,
@@ -46,6 +48,7 @@ defmodule JX.CLI.Fanout do
              [
                baseline: baseline,
                base_branch: parsed[:base_branch],
+               repo: parsed[:repo],
                root: parsed[:root],
                run_id: parsed[:run_id],
                coverage_file: parsed[:coverage_file],
@@ -88,6 +91,8 @@ defmodule JX.CLI.Fanout do
           all: :boolean,
           root: :string,
           lease_timeout_seconds: :integer,
+          agent: :string,
+          agent_bin: :string,
           codex_bin: :string,
           tmux_server: :string,
           json: :boolean
@@ -101,6 +106,9 @@ defmodule JX.CLI.Fanout do
         _other -> :invalid
       end
 
+    agent = parsed[:agent]
+    agent_bin = parsed[:agent_bin] || parsed[:codex_bin]
+
     with :ok <- validate_options(invalid),
          :ok <- validate_launch_target(target, parsed[:all]),
          {:ok, result} <-
@@ -110,7 +118,8 @@ defmodule JX.CLI.Fanout do
              [
                root: parsed[:root],
                lease_timeout_seconds: parsed[:lease_timeout_seconds],
-               codex_bin: parsed[:codex_bin],
+               agent: agent,
+               agent_bin: agent_bin,
                tmux_server: parsed[:tmux_server]
              ]
            ]) do
@@ -181,6 +190,48 @@ defmodule JX.CLI.Fanout do
              ]
            ]) do
       print_fanout_pr(result, json: parsed[:json] || false)
+      :ok
+    end
+  end
+
+  def run(["report", run_ref | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [
+          root: :string,
+          assignment_id: :string,
+          report_id: :string,
+          agent_id: :string,
+          sequence: :integer,
+          previous_report_id: :string,
+          state: :string,
+          data: :string,
+          json: :boolean
+        ]
+      )
+
+    report_attrs = [
+      report_id: parsed[:report_id],
+      assignment_id: parsed[:assignment_id],
+      agent_id: parsed[:agent_id],
+      sequence: parsed[:sequence],
+      previous_report_id: parsed[:previous_report_id],
+      state: parsed[:state],
+      data: parse_report_data(parsed[:data]),
+      reported_at:
+        DateTime.utc_now()
+        |> DateTime.truncate(:second)
+        |> DateTime.to_iso8601()
+    ]
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @fanout_report_usage),
+         {:ok, result} <-
+           apply(fanout(opts), :accept_report, [
+             run_ref,
+             Map.new(report_attrs)
+           ]) do
+      print_fanout_report(result, json: parsed[:json] || false)
       :ok
     end
   end
@@ -362,6 +413,26 @@ defmodule JX.CLI.Fanout do
       rows
     )
   end
+
+  defp print_fanout_report(result, json: true), do: print_json(result)
+
+  defp print_fanout_report(result, json: false) do
+    status = result[:status] || Map.get(result, "status", "unknown")
+    path = result[:path] || Map.get(result, "path", "-")
+    IO.puts("fanout report #{status}")
+    IO.puts("path: #{path}")
+  end
+
+  defp parse_report_data(nil), do: %{}
+
+  defp parse_report_data(text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, decoded} -> decoded
+      {:error, _reason} -> %{raw: text}
+    end
+  end
+
+  defp parse_report_data(other), do: other
 
   defp truncate(value, max_length) do
     value = value || ""

@@ -2,6 +2,28 @@ defmodule JX.OrchestratorDaemonTest do
   use ExUnit.Case, async: false
 
   alias JX.OrchestratorDaemon
+  alias JX.Repo
+  alias JX.ResourceOwnerships.Resource
+
+  defmodule FailingResourceOwnerships do
+    def register_tmux_session(_attrs), do: {:error, :forced_registry_failure}
+  end
+
+  setup do
+    original_resource_ownerships = Application.get_env(:jx, :resource_ownerships)
+    Application.delete_env(:jx, :resource_ownerships)
+    Repo.delete_all(Resource)
+
+    on_exit(fn ->
+      if original_resource_ownerships do
+        Application.put_env(:jx, :resource_ownerships, original_resource_ownerships)
+      else
+        Application.delete_env(:jx, :resource_ownerships)
+      end
+    end)
+
+    :ok
+  end
 
   test "orchestrate_args defaults to an executing acknowledged infinite loop" do
     assert OrchestratorDaemon.orchestrate_args(
@@ -128,6 +150,15 @@ defmodule JX.OrchestratorDaemonTest do
     assert started.started == true
     assert started.command =~ "orchestrate"
 
+    assert %Resource{
+             owner_type: "orchestrator_daemon",
+             owner_project: "orchestrator",
+             resource_type: "tmux_session",
+             resource_name: "jx-orchestrator-test",
+             tmux_server: "jx",
+             cleanup_policy: "kill_tmux_session"
+           } = Repo.get_by!(Resource, resource_name: "jx-orchestrator-test")
+
     File.write!(log_path, "one\ntwo\nthree")
     assert {:ok, logs} = OrchestratorDaemon.logs(Keyword.put(opts, :lines, 2))
     assert logs.output == "two\nthree"
@@ -138,6 +169,27 @@ defmodule JX.OrchestratorDaemonTest do
 
     assert {:ok, already_stopped} = OrchestratorDaemon.stop(opts)
     assert already_stopped.stopped == false
+  end
+
+  test "start tears down daemon tmux session when ownership registration fails" do
+    {tmp, log_path} = install_fake_tmux!()
+    Application.put_env(:jx, :resource_ownerships, FailingResourceOwnerships)
+
+    opts = [
+      session_name: "jx-orchestrator-fail",
+      tmux_server: "jx",
+      log_path: log_path,
+      cwd: tmp,
+      cli_path: "/tmp/jx",
+      dry_run: true,
+      replace: true
+    ]
+
+    assert {:error, {:orchestrator_resource_registration_failed, :forced_registry_failure}} =
+             OrchestratorDaemon.start(opts)
+
+    assert {:ok, status} = OrchestratorDaemon.status(opts)
+    assert status.running == false
   end
 
   test "daemon validation rejects unsafe session and tmux server names" do

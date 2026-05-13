@@ -16,6 +16,7 @@ defmodule JX.DelegatedExecutionTest do
   alias JX.OperationalLeases.Lease
   alias JX.OrchestrationActions.OrchestrationAction
   alias JX.Repo
+  alias JX.ResourceOwnerships.Resource
   alias JX.SafeActions
   alias JX.SafeActions.ExecutionEvent
   alias JX.Workspace
@@ -23,8 +24,23 @@ defmodule JX.DelegatedExecutionTest do
   @token "delegated-token"
   @capability "safe_action:rerun_devide_command"
 
+  defmodule FailingResourceOwnerships do
+    def register_tmux_session(_attrs), do: {:error, :forced_registry_failure}
+  end
+
   setup do
+    original_resource_ownerships = Application.get_env(:jx, :resource_ownerships)
+    Application.delete_env(:jx, :resource_ownerships)
     cleanup_state()
+
+    on_exit(fn ->
+      if original_resource_ownerships do
+        Application.put_env(:jx, :resource_ownerships, original_resource_ownerships)
+      else
+        Application.delete_env(:jx, :resource_ownerships)
+      end
+    end)
+
     :ok
   end
 
@@ -429,6 +445,18 @@ defmodule JX.DelegatedExecutionTest do
     assert session.log_path == "/tmp/jx-owned.log"
     assert session.correlation_id == correlation_id
 
+    assert %Resource{
+             owner_project: "ws-runner",
+             assignment_id: assignment_id,
+             execution_id: "rsess-owned",
+             resource_type: "tmux_session",
+             resource_name: "jx-owned",
+             tmux_server: "jx",
+             cleanup_policy: "kill_tmux_session"
+           } = Repo.get_by!(Resource, resource_type: "tmux_session", resource_name: "jx-owned")
+
+    assert assignment_id == assignment.assignment_id
+
     assert %Lease{owner: "agent-runner-a", status: "active"} =
              Repo.get_by!(Lease, lease_id: claimed.lease_id)
 
@@ -487,6 +515,41 @@ defmodule JX.DelegatedExecutionTest do
     assert rebuilt.state.runner_sessions["rsess-owned"].status == "claimed"
     assert get_in(rebuilt.state.timelines, ["runner:runner-a"])
     assert get_in(rebuilt.state.timelines, ["session:rsess-owned"])
+  end
+
+  test "runner assignment claim rolls back when resource registration fails" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-runner-fail", "apr-runner-fail", "test")
+
+    assert {:ok, assignment} =
+             DelegatedExecution.create_assignment(action.action_id, now: now, ttl_seconds: 60)
+
+    assert {:ok, _runner} =
+             DelegatedExecution.register_runner(%{
+               runner_id: "runner-resource-fail",
+               agent_id: "agent-resource-fail",
+               host_name: "host-a",
+               capabilities: [@capability],
+               workspace_affinity: ["ws-runner-fail"],
+               tmux_server: "jx",
+               tmux_session_prefix: "jx-runner-fail",
+               now: now
+             })
+
+    Application.put_env(:jx, :resource_ownerships, FailingResourceOwnerships)
+
+    assert {:error, :forced_registry_failure} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-resource-fail",
+               session_id: "rsess-resource-fail",
+               tmux_session_name: "jx-resource-fail",
+               now: now,
+               ttl_seconds: 60
+             )
+
+    refute Repo.get_by(RunnerSession, session_id: "rsess-resource-fail")
+    refute Repo.get_by(Resource, resource_name: "jx-resource-fail")
   end
 
   test "runner session executes through the existing safe-action DevIDE endpoint" do
@@ -1491,6 +1554,7 @@ defmodule JX.DelegatedExecutionTest do
 
   defp cleanup_state do
     Repo.delete_all(RunnerReport)
+    Repo.delete_all(Resource)
     Repo.delete_all(RunnerSession)
     Repo.delete_all(Runner)
     Repo.delete_all(Report)

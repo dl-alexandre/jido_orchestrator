@@ -102,6 +102,12 @@ defmodule JX.CLI.FanoutTest do
        }}
     end
 
+    def accept_report(run_ref, report_attrs) do
+      send(self(), {:accept_report, run_ref, report_attrs})
+
+      {:ok, %{status: :accepted, path: "/fanout/#{run_ref}/reports/coverage-01/accepted/test.json"}}
+    end
+
     def status(run_ref, opts) do
       send(self(), {:status, run_ref, opts})
 
@@ -137,6 +143,8 @@ defmodule JX.CLI.FanoutTest do
                      "abc123",
                      "--base-branch",
                      "develop",
+                     "--repo",
+                     "owner/repo",
                      "--root",
                      "/tmp/fanout",
                      "--run-id",
@@ -164,6 +172,7 @@ defmodule JX.CLI.FanoutTest do
     assert_received {:plan, "coverage", opts}
     assert opts[:baseline] == "abc123"
     assert opts[:base_branch] == "develop"
+    assert opts[:repo] == "owner/repo"
     assert opts[:root] == "/tmp/fanout"
     assert opts[:run_id] == "run-1"
     assert opts[:coverage_file] == "coverage.csv"
@@ -209,7 +218,9 @@ defmodule JX.CLI.FanoutTest do
                      "/tmp/fanout",
                      "--lease-timeout-seconds",
                      "30",
-                     "--codex-bin",
+                     "--agent",
+                     "codex",
+                     "--agent-bin",
                      "/bin/codex",
                      "--tmux-server",
                      "jx"
@@ -225,7 +236,8 @@ defmodule JX.CLI.FanoutTest do
     assert_received {:launch, "run-1", "coverage-01", opts}
     assert opts[:root] == "/tmp/fanout"
     assert opts[:lease_timeout_seconds] == 30
-    assert opts[:codex_bin] == "/bin/codex"
+    assert opts[:agent] == "codex"
+    assert opts[:agent_bin] == "/bin/codex"
     assert opts[:tmux_server] == "jx"
   end
 
@@ -294,6 +306,45 @@ defmodule JX.CLI.FanoutTest do
     decoded = Jason.decode!(output)
     assert decoded["run_id"] == "run-1"
     assert decoded["counts"]["planned"] == 1
+  end
+
+  test "fanout report parses and submits a report without starting the app" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   [
+                     "report",
+                     "run-1",
+                     "--root",
+                     "/tmp/fanout",
+                     "--assignment-id",
+                     "coverage-01",
+                     "--report-id",
+                     "rpt-1",
+                     "--agent-id",
+                     "agent-1",
+                     "--sequence",
+                     "1",
+                     "--state",
+                     "in_progress",
+                     "--data",
+                     ~s({"branch":"test/coverage-01"})
+                   ],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    assert_received {:accept_report, "run-1", report_attrs}
+    assert report_attrs[:assignment_id] == "coverage-01"
+    assert report_attrs[:report_id] == "rpt-1"
+    assert report_attrs[:agent_id] == "agent-1"
+    assert report_attrs[:sequence] == 1
+    assert report_attrs[:state] == "in_progress"
+    assert report_attrs[:data]["branch"] == "test/coverage-01"
+    assert output =~ "fanout report accepted"
   end
 
   test "fanout ownership passes warn-only and renders warnings" do
