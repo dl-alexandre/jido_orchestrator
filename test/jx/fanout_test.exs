@@ -782,6 +782,336 @@ defmodule JX.FanoutTest do
     assert status.counts["planned"] == 5
   end
 
+  test "launch script generates claude agent command", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "test-coverage-claude"
+      )
+
+    assert {:ok, %{result: "pass"}} =
+             Fanout.preflight(result.run_path,
+               runner: fn _assignment, _script -> {:ok, preflight_output()} end
+             )
+
+    parent = self()
+
+    runner = fn assignment, script ->
+      assert script =~ "launch_agent_goal.sh"
+      assert script =~ "--dangerously-skip-permissions"
+      assert script =~ "claude-"
+      assert assignment["assignment_id"] == "auth-api-security"
+      send(parent, {:launch_script, assignment["assignment_id"], script})
+
+      {:ok,
+       """
+       JX_LAUNCH\tassignment_start_commit\t53907e03
+       JX_LAUNCH\tagent_id\tclaude-test-coverage-claude-auth-api-security
+       JX_LAUNCH\tsession_name\tjx_fanout_test
+       JX_LAUNCH\tgoal_path\t/tmp/goal.md
+       JX_LAUNCH\tgoal_status_path\t/tmp/goal_status.json
+       """}
+    end
+
+    assert {:ok, launch} =
+             Fanout.launch(result.run_path, "auth-api-security",
+               runner: runner,
+               agent: "claude"
+             )
+
+    assert [%{assignment_id: "auth-api-security", state: "launching"}] =
+             launch.assignments
+
+    assert_received {:launch_script, "auth-api-security", _script}
+  end
+
+  test "launch script generates opencode agent command", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "test-coverage-opencode"
+      )
+
+    assert {:ok, %{result: "pass"}} =
+             Fanout.preflight(result.run_path,
+               runner: fn _assignment, _script -> {:ok, preflight_output()} end
+             )
+
+    parent = self()
+
+    runner = fn assignment, script ->
+      assert script =~ "opencode"
+      assert script =~ "--dir"
+      assert script =~ "opencode-"
+      assert assignment["assignment_id"] == "auth-api-security"
+      send(parent, {:launch_script, assignment["assignment_id"], script})
+
+      {:ok,
+       """
+       JX_LAUNCH\tassignment_start_commit\t53907e03
+       JX_LAUNCH\tagent_id\topencode-test-coverage-opencode-auth-api-security
+       JX_LAUNCH\tsession_name\tjx_fanout_test
+       JX_LAUNCH\tgoal_path\t/tmp/goal.md
+       JX_LAUNCH\tgoal_status_path\t/tmp/goal_status.json
+       """}
+    end
+
+    assert {:ok, launch} =
+             Fanout.launch(result.run_path, "auth-api-security",
+               runner: runner,
+               agent: "opencode"
+             )
+
+    assert [%{assignment_id: "auth-api-security", state: "launching"}] =
+             launch.assignments
+
+    assert_received {:launch_script, "auth-api-security", _script}
+  end
+
+  test "launch script falls back to default command for unknown agent", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "test-coverage-unknown-agent"
+      )
+
+    assert {:ok, %{result: "pass"}} =
+             Fanout.preflight(result.run_path,
+               runner: fn _assignment, _script -> {:ok, preflight_output()} end
+             )
+
+    parent = self()
+
+    runner = fn assignment, script ->
+      assert script =~ "launch_agent_goal.sh"
+      assert script =~ "custom-agent"
+      assert script =~ "custom-agent-test-coverage-unknown-agent-auth-api-security"
+      assert assignment["assignment_id"] == "auth-api-security"
+      send(parent, {:launch_script, assignment["assignment_id"], script})
+
+      {:ok,
+       """
+       JX_LAUNCH\tassignment_start_commit\t53907e03
+       JX_LAUNCH\tagent_id\tcustom-agent-test-coverage-unknown-agent-auth-api-security
+       JX_LAUNCH\tsession_name\tjx_fanout_test
+       JX_LAUNCH\tgoal_path\t/tmp/goal.md
+       JX_LAUNCH\tgoal_status_path\t/tmp/goal_status.json
+       """}
+    end
+
+    assert {:ok, launch} =
+             Fanout.launch(result.run_path, "auth-api-security",
+               runner: runner,
+               agent: "custom-agent"
+             )
+
+    assert [%{assignment_id: "auth-api-security", state: "launching"}] =
+             launch.assignments
+
+    assert_received {:launch_script, "auth-api-security", _script}
+  end
+
+  test "launch script uses custom agent binary via --agent-bin", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "test-coverage-custom-bin"
+      )
+
+    assert {:ok, %{result: "pass"}} =
+             Fanout.preflight(result.run_path,
+               runner: fn _assignment, _script -> {:ok, preflight_output()} end
+             )
+
+    parent = self()
+
+    runner = fn assignment, script ->
+      assert script =~ "/opt/bin/codex"
+      send(parent, {:launch_script, assignment["assignment_id"], script})
+
+      {:ok,
+       """
+       JX_LAUNCH\tassignment_start_commit\t53907e03
+       JX_LAUNCH\tagent_id\tcodex-test-coverage-custom-bin-auth-api-security
+       JX_LAUNCH\tsession_name\tjx_fanout_test
+       JX_LAUNCH\tgoal_path\t/tmp/goal.md
+       JX_LAUNCH\tgoal_status_path\t/tmp/goal_status.json
+       """}
+    end
+
+    assert {:ok, _launch} =
+             Fanout.launch(result.run_path, "auth-api-security",
+               runner: runner,
+               agent: "codex",
+               agent_bin: "/opt/bin/codex"
+             )
+
+    assert_received {:launch_script, "auth-api-security", _script}
+  end
+
+  test "per-host baseline overrides global baseline in dynamic coverage", %{root: root} do
+    modules = [
+      %{path: "lib/one/api/token.ex", coverage: 20.0, risk: "high"}
+    ]
+
+    assert {:ok, result} =
+             Fanout.plan("coverage-dynamic",
+               baseline: "53907e03",
+               root: root,
+               run_id: "per-host-baseline-test",
+               coverage_modules: modules,
+               host_count: 1,
+               host: ["h1=/repo,/worktrees,mise exec --,abcd1234"]
+             )
+
+    assignment =
+      read_json!(Path.join([result.run_path, "assignments", "coverage-01.json"]))
+
+    assert assignment["intent"]["baseline"] == "abcd1234"
+    assert assignment["resolved_environment"]["baseline"] == "abcd1234"
+  end
+
+  test "manifest and assignment repo defaults to example-project", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "default-repo-test"
+      )
+
+    manifest = read_json!(Path.join(result.run_path, "run_manifest.json"))
+    assert manifest["repo"] == "example-project"
+
+    assignment =
+      read_json!(Path.join([result.run_path, "assignments", "auth-api-security.json"]))
+
+    assert assignment["intent"]["repo"] == "example-project"
+  end
+
+  test "--repo option sets manifest repo", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "custom-repo-test",
+        repo: "MILCGroup/OneBackend-v3"
+      )
+
+    manifest = read_json!(Path.join(result.run_path, "run_manifest.json"))
+    assert manifest["repo"] == "MILCGroup/OneBackend-v3"
+  end
+
+  test "base_branch_matches failure blocks launch", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "base-branch-blocks"
+      )
+
+    assert {:ok, preflight} =
+             Fanout.preflight(result.run_path,
+               runner: fn assignment, _script ->
+                 if assignment["assignment_id"] == "auth-api-security" do
+                   {:ok, preflight_output("base_branch_matches")}
+                 else
+                   {:ok, preflight_output()}
+                 end
+               end
+             )
+
+    assert preflight.result == "fail"
+
+    liveview =
+      Enum.find(preflight.assignments, &(&1.assignment_id == "auth-api-security"))
+
+    assert liveview.publishability == "fail"
+    assert "base_branch_matches" in liveview.failed_checks
+
+    assert {:error, {:preflight_required, ["auth-api-security"]}} =
+             Fanout.launch(result.run_path, "auth-api-security",
+               runner: fn _assignment, _script -> {:ok, ""} end
+             )
+  end
+
+  test "stale preflight TTL blocks launch", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "stale-preflight-test"
+      )
+
+    assert {:ok, %{result: "pass"}} =
+             Fanout.preflight(result.run_path,
+               runner: fn _assignment, _script -> {:ok, preflight_output()} end
+             )
+
+    old_time =
+      DateTime.utc_now()
+      |> DateTime.add(-7200, :second)
+      |> DateTime.truncate(:second)
+      |> DateTime.to_iso8601()
+
+    update_assignment!(result.run_path, "auth-api-security", fn assignment ->
+      put_in(assignment, ["preflight"], %{
+        "publishability" => "pass",
+        "checked_at" => old_time,
+        "ttl_seconds" => 3600,
+        "checks" => []
+      })
+      |> Map.put("state", "preflight_passed")
+    end)
+
+    assert {:error, {:preflight_required, ["auth-api-security"]}} =
+             Fanout.launch(result.run_path, "auth-api-security",
+               runner: fn _assignment, _script -> {:ok, ""} end
+             )
+  end
+
+  test "agent prompt includes Reporting section with jx fanout report command", %{root: root} do
+    {:ok, result} =
+      Fanout.plan("test-coverage",
+        baseline: "53907e03",
+        root: root,
+        run_id: "agent-prompt-test"
+      )
+
+    assert {:ok, %{result: "pass"}} =
+             Fanout.preflight(result.run_path,
+               runner: fn _assignment, _script -> {:ok, preflight_output()} end
+             )
+
+    parent = self()
+
+    runner = fn assignment, script ->
+      assert script =~ "## Reporting"
+      assert script =~ "jx fanout report"
+      assert script =~ "--assignment-id"
+      assert script =~ "--report-id"
+      assert script =~ assignment["assignment_id"]
+      send(parent, {:prompt_script, assignment["assignment_id"], script})
+
+      {:ok,
+       """
+       JX_LAUNCH\tassignment_start_commit\t53907e03
+       JX_LAUNCH\tagent_id\tcodex-agent-prompt-test-auth-api-security
+       JX_LAUNCH\tsession_name\tjx_fanout_test
+       JX_LAUNCH\tgoal_path\t/tmp/goal.md
+       JX_LAUNCH\tgoal_status_path\t/tmp/goal_status.json
+       """}
+    end
+
+    assert {:ok, _launch} =
+             Fanout.launch(result.run_path, "auth-api-security", runner: runner)
+
+    assert_received {:prompt_script, "auth-api-security", _script}
+  end
+
   defp read_json!(path) do
     path
     |> File.read!()
