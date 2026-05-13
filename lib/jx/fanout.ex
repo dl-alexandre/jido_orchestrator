@@ -506,8 +506,8 @@ defmodule JX.Fanout do
       %{
         id: "liveview-ui",
         host: "optiplex-xe2-local",
-        base_path: "~/OneBackend-v3",
-        worktree_path: "~/worktrees/test-coverage-liveview-ui",
+        base_path: "~/Work/OneBackend-v3",
+        worktree_path: "~/Work/worktrees/test-coverage-liveview-ui",
         branch: "test/liveview-ui-coverage",
         validation_prefix: "mise exec --",
         title: "test: expand LiveView interaction coverage",
@@ -529,8 +529,8 @@ defmodule JX.Fanout do
       %{
         id: "oban-audit",
         host: "ideapad",
-        base_path: "~/OneBackend-v3",
-        worktree_path: "~/worktrees/test-coverage-oban-audit",
+        base_path: "~/Work/OneBackend-v3",
+        worktree_path: "~/Work/worktrees/test-coverage-oban-audit",
         branch: "test/oban-audit-coverage",
         validation_prefix: "mise exec --",
         title: "test: expand background job and audit coverage",
@@ -555,7 +555,7 @@ defmodule JX.Fanout do
         id: "reports-export",
         host: "testserver",
         base_path: "~/OneBackend-v3",
-        worktree_path: "~/worktrees/test-coverage-reports-export",
+        worktree_path: "~/OneBackend-v3-worktrees/test-coverage-reports-export",
         branch: "test/reports-export-coverage",
         validation_prefix: "docker compose run --rm app",
         title: "test: expand reports and export coverage",
@@ -628,7 +628,13 @@ defmodule JX.Fanout do
         end)
         |> Enum.reject(&(Map.get(&1, :modules, []) == []))
         |> Enum.map(fn attrs ->
-          assignment(run_id, baseline, opts[:base_branch] || "develop", attrs, run_path)
+          assignment(
+            run_id,
+            attrs.baseline || baseline,
+            opts[:base_branch] || "develop",
+            attrs,
+            run_path
+          )
         end)
 
       {:ok, assignments}
@@ -808,7 +814,8 @@ defmodule JX.Fanout do
       base_path: first_present([host["base_path"], opts[:base_path], "."]),
       worktree_root: worktree_root,
       validation_prefix:
-        first_present([host["validation_prefix"], opts[:validation_prefix], "mise exec --"])
+        first_present([host["validation_prefix"], opts[:validation_prefix], "mise exec --"]),
+      baseline: first_present([host["baseline"], opts[:baseline], nil])
     }
   end
 
@@ -822,18 +829,19 @@ defmodule JX.Fanout do
         [name] -> {String.trim(name), ""}
       end
 
-    [base_path, worktree_root, validation_prefix] =
+    [base_path, worktree_root, validation_prefix, baseline] =
       details
-      |> String.split(",", parts: 3)
+      |> String.split(",", parts: 4)
       |> Enum.map(&String.trim/1)
-      |> pad_list(3)
+      |> pad_list(4)
 
     normalize_dynamic_host(
       %{
         "name" => if(name == "", do: "host-#{index}", else: name),
         "base_path" => base_path,
         "worktree_root" => worktree_root,
-        "validation_prefix" => validation_prefix
+        "validation_prefix" => validation_prefix,
+        "baseline" => baseline
       },
       index,
       opts
@@ -921,6 +929,7 @@ defmodule JX.Fanout do
       worktree_path: Path.join(host.worktree_root, "test-coverage-#{assignment_id}"),
       branch: "test/#{assignment_id}",
       validation_prefix: host.validation_prefix,
+      baseline: host.baseline,
       title: "test: expand coverage packet #{index}",
       allowed: Enum.uniq(paths ++ Enum.map(paths, &test_path_for_source/1)),
       forbidden: normalize_list(Map.get(risk_rules, "forbidden_paths", [])),
@@ -1192,7 +1201,7 @@ defmodule JX.Fanout do
     intent = assignment["intent"] || %{}
     base_path = env["base_path"]
     worktree_path = env["worktree_path"]
-    baseline = manifest["baseline"] || intent["baseline"]
+    baseline = intent["baseline"] || manifest["baseline"]
     base_branch = manifest["base_branch"] || "develop"
     branch = intent["branch"]
     validation_prefix = env["validation_prefix"] || ""
@@ -1497,7 +1506,7 @@ defmodule JX.Fanout do
     base_path = env["base_path"]
     worktree_path = env["worktree_path"]
     branch = intent["branch"]
-    baseline = manifest["baseline"] || intent["baseline"]
+    baseline = intent["baseline"] || manifest["baseline"]
     objective = intent["task_objective"] || ""
     agent_name = opts[:agent] || "codex"
     agent_bin = opts[:agent_bin] || agent_binary(agent_name)
@@ -1654,7 +1663,7 @@ defmodule JX.Fanout do
   defp diff_script(manifest, assignment) do
     env = assignment["resolved_environment"] || %{}
     worktree_path = env["worktree_path"]
-    baseline = manifest["baseline"] || get_in(assignment, ["intent", "baseline"])
+    baseline = get_in(assignment, ["intent", "baseline"]) || manifest["baseline"]
 
     """
     set -eu

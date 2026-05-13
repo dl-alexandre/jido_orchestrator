@@ -105,7 +105,8 @@ defmodule JX.CLI.FanoutTest do
     def accept_report(run_ref, report_attrs) do
       send(self(), {:accept_report, run_ref, report_attrs})
 
-      {:ok, %{status: :accepted, path: "/fanout/#{run_ref}/reports/coverage-01/accepted/test.json"}}
+      {:ok,
+       %{status: :accepted, path: "/fanout/#{run_ref}/reports/coverage-01/accepted/test.json"}}
     end
 
     def status(run_ref, opts) do
