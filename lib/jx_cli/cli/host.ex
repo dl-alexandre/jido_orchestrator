@@ -11,9 +11,23 @@ defmodule JX.CLI.Host do
   @host_doctor_usage "jx host doctor <host> [--agent claude|opencode|codex] [--transport native|acpx]"
   @host_add_usage "jx host add <name> (--ssh <user@host> | --local) --workspace <path>"
   @hosts_doctor_usage "jx hosts doctor [--agent claude|opencode|codex] [--transport native|acpx] [--json]"
+  @host_capacity_usage "jx host capacity <host> [--ram <mb>] [--disk <mb>] [--cpu <cores>]"
+  @host_capacity_set_usage "jx host capacity set <host> <n>"
+  @host_capacity_eval_usage "jx host capacity eval <host>"
+  @hosts_capacity_usage "jx hosts capacity [--ram <mb>] [--disk <mb>] [--cpu <cores>] [--json]"
+  @hosts_capacity_eval_usage "jx hosts capacity eval [--json]"
 
-  def usage_lines(:host), do: [@host_add_usage, "jx host ls", @host_doctor_usage]
-  def usage_lines(:hosts), do: [@hosts_doctor_usage]
+  def usage_lines(:host),
+    do: [
+      @host_add_usage,
+      "jx host ls",
+      @host_doctor_usage,
+      @host_capacity_usage,
+      @host_capacity_set_usage,
+      @host_capacity_eval_usage
+    ]
+
+  def usage_lines(:hosts), do: [@hosts_doctor_usage, @hosts_capacity_usage, @hosts_capacity_eval_usage]
 
   def run(["add", name | args], opts) do
     {parsed, rest, invalid} =
@@ -64,8 +78,73 @@ defmodule JX.CLI.Host do
     end
   end
 
+  def run(["capacity", "set", name, raw_limit | rest], opts) do
+    with :ok <- expect_no_args(rest, @host_capacity_set_usage),
+         {limit, ""} <- Integer.parse(raw_limit),
+         true <- limit > 0 || {:error, "limit must be a positive integer"},
+         :ok <- start_app(opts),
+         {:ok, host} <- apply(workspace(opts), :set_capacity_limit, [name, limit]) do
+      IO.puts("host #{host.name} capacity limit set to #{host.capacity_limit}")
+      :ok
+    else
+      :error -> {:error, "limit must be a positive integer"}
+      {_, _} -> {:error, "limit must be a positive integer"}
+      other -> other
+    end
+  end
+
+  def run(["capacity", "eval", name | rest], opts) do
+    with :ok <- expect_no_args(rest, @host_capacity_eval_usage),
+         :ok <- start_app(opts),
+         {:ok, result} <- apply(workspace(opts), :evaluate_capacity, [name]) do
+      print_eval_result(result)
+      :ok
+    end
+  end
+
+  def run(["capacity", name | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args, strict: [ram: :integer, disk: :integer, cpu: :float])
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @host_capacity_usage),
+         :ok <- start_app(opts),
+         {:ok, result} <-
+           apply(workspace(opts), :capacity_host, [name, capacity_opts(parsed)]) do
+      print_capacity_result(result)
+      :ok
+    end
+  end
+
   def run(["doctor" | _args], _opts), do: {:error, "usage: #{@host_doctor_usage}"}
   def run(_args, _opts), do: {:error, "usage: #{@host_add_usage} | #{@host_doctor_usage}"}
+
+  def run_plural(["capacity", "eval" | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args, strict: [json: :boolean])
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @hosts_capacity_eval_usage),
+         :ok <- start_app(opts),
+         {:ok, report} <- apply(workspace(opts), :evaluate_all_capacity, []) do
+      print_hosts_eval_report(report, json: parsed[:json] || false)
+      :ok
+    end
+  end
+
+  def run_plural(["capacity" | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args, strict: [ram: :integer, disk: :integer, cpu: :float, json: :boolean])
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @hosts_capacity_usage),
+         :ok <- start_app(opts),
+         {:ok, report} <-
+           apply(workspace(opts), :capacity_hosts, [capacity_opts(parsed)]) do
+      print_hosts_capacity_report(report, json: parsed[:json] || false)
+      :ok
+    end
+  end
 
   def run_plural(["doctor" | args], opts) do
     {parsed, rest, invalid} =
@@ -211,6 +290,100 @@ defmodule JX.CLI.Host do
         end)
     }
   end
+
+  # ---------------------------------------------------------------------------
+  # Capacity helpers
+  # ---------------------------------------------------------------------------
+
+  defp capacity_opts(parsed) do
+    profile = JX.HostCapacity.default_profile()
+
+    profile =
+      if parsed[:ram], do: Map.put(profile, :ram_mb_per_slot, parsed[:ram]), else: profile
+
+    profile =
+      if parsed[:disk], do: Map.put(profile, :disk_mb_per_slot, parsed[:disk]), else: profile
+
+    profile =
+      if parsed[:cpu], do: Map.put(profile, :cpu_cores_per_slot, parsed[:cpu]), else: profile
+
+    [profile: profile]
+  end
+
+  defp print_capacity_result(%{error: reason} = r) do
+    IO.puts("host #{r.host}: error - #{reason}")
+  end
+
+  defp print_capacity_result(%{host: name, resources: res, limits: lim, recommended_worktrees: rec, profile: prof}) do
+    IO.puts("host #{name}")
+    IO.puts("")
+    IO.puts("  resources")
+    IO.puts("    RAM   #{res.ram_available_mb} MB available / #{res.ram_total_mb} MB total")
+    IO.puts("    disk  #{res.disk_available_mb} MB available / #{res.disk_total_mb} MB total")
+    IO.puts("    CPU   #{res.cpu_cores} logical cores")
+    IO.puts("")
+    IO.puts("  profile: #{prof.name}")
+    IO.puts("    #{prof.ram_mb_per_slot} MB RAM / #{prof.disk_mb_per_slot} MB disk / #{prof.cpu_cores_per_slot} CPU cores per slot")
+    IO.puts("")
+    IO.puts("  capacity")
+    IO.puts("    by RAM   #{lim.by_ram} worktree(s)")
+    IO.puts("    by disk  #{lim.by_disk} worktree(s)")
+    IO.puts("    by CPU   #{lim.by_cpu} worktree(s)")
+    IO.puts("")
+    IO.puts("  recommended: #{rec} concurrent worktree(s)")
+  end
+
+  defp print_hosts_capacity_report(%{results: results}, json: true) do
+    print_json(%{hosts_capacity: results})
+  end
+
+  defp print_hosts_capacity_report(%{results: results}, json: false) do
+    Enum.each(Enum.with_index(results), fn {result, index} ->
+      if index > 0, do: IO.puts("")
+      print_capacity_result(result)
+    end)
+  end
+
+  defp print_eval_result(%{verdict: :insufficient_data} = r) do
+    IO.puts("host #{r.host}")
+    IO.puts("")
+    IO.puts("  verdict: insufficient data")
+    IO.puts("  #{r.reasoning}")
+  end
+
+  defp print_eval_result(r) do
+    limit_display = if r.current_limit, do: "#{r.current_limit}", else: "formula-derived"
+    suggested = if r.suggested_limit, do: "  suggested limit: #{r.suggested_limit}", else: "  suggested limit: no change"
+
+    IO.puts("host #{r.host}")
+    IO.puts("")
+    IO.puts("  observations analysed: #{r.observations_analysed}")
+    IO.puts("  avg RAM headroom/slot: #{r.avg_headroom_per_slot} MB")
+
+    if r.avg_load_ratio do
+      IO.puts("  avg CPU load ratio:    #{r.avg_load_ratio}")
+    end
+
+    IO.puts("")
+    IO.puts("  current limit: #{limit_display}")
+    IO.puts("  verdict:       #{r.verdict}")
+    IO.puts(suggested)
+    IO.puts("")
+    IO.puts("  #{r.reasoning}")
+  end
+
+  defp print_hosts_eval_report(%{results: results}, json: true) do
+    print_json(%{hosts_capacity_eval: results})
+  end
+
+  defp print_hosts_eval_report(%{results: results}, json: false) do
+    Enum.each(Enum.with_index(results), fn {result, index} ->
+      if index > 0, do: IO.puts("")
+      print_eval_result(result)
+    end)
+  end
+
+  # ---------------------------------------------------------------------------
 
   defp print_hosts([]), do: IO.puts("no hosts")
 

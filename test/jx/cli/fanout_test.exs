@@ -182,6 +182,33 @@ defmodule JX.CLI.FanoutTest do
     assert opts[:host] == ["local=/repo,/worktrees,mix test", "build=/repo,/build,mix precommit"]
   end
 
+  test "fanout plan renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   [
+                     "plan",
+                     "coverage",
+                     "--baseline",
+                     "abc123",
+                     "--root",
+                     "/tmp/fanout",
+                     "--run-id",
+                     "run-1",
+                     "--json"
+                   ],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["run_id"] == "run-1"
+    assert decoded["assignment_count"] == 1
+  end
+
   test "fanout plan requires baseline before adapter calls" do
     assert {:error, message} =
              Fanout.run(["plan", "coverage"],
@@ -192,6 +219,40 @@ defmodule JX.CLI.FanoutTest do
     assert message =~ "usage: jx fanout plan"
     refute_received :plan
     refute_received :started
+  end
+
+  test "fanout preflight runs without starting the app" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   ["preflight", "run-1", "--root", "/tmp/fanout"],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    assert_received {:preflight, "run-1", [root: "/tmp/fanout", ttl_seconds: nil]}
+    assert output =~ "fanout preflight run-1"
+    assert output =~ "pass"
+  end
+
+  test "fanout preflight renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   ["preflight", "run-1", "--root", "/tmp/fanout", "--json"],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["run_id"] == "run-1"
+    assert decoded["result"] == "pass"
   end
 
   test "fanout launch validates target shape before adapter calls" do
@@ -242,6 +303,23 @@ defmodule JX.CLI.FanoutTest do
     assert opts[:tmux_server] == "jx"
   end
 
+  test "fanout launch renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   ["launch", "run-1", "--all", "--root", "/tmp/fanout", "--json"],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["run_id"] == "run-1"
+    assert length(decoded["assignments"]) == 1
+  end
+
   test "fanout monitor starts the app and renders text" do
     output =
       capture_io(fn ->
@@ -256,6 +334,22 @@ defmodule JX.CLI.FanoutTest do
     assert_received {:monitor, "run-1", [root: "/tmp/fanout"]}
     assert output =~ "fanout monitor run-1"
     assert output =~ "watch-1"
+  end
+
+  test "fanout monitor renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(["monitor", "run-1", "--root", "/tmp/fanout", "--json"],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    assert_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["run_id"] == "run-1"
+    assert length(decoded["assignments"]) == 1
   end
 
   test "fanout pr starts the app and respects ci watch switch" do
@@ -289,6 +383,23 @@ defmodule JX.CLI.FanoutTest do
     assert opts[:ci_watch_mode] == "hold"
     assert opts[:allow_unvalidated] == true
     assert output =~ "fanout PR coverage-01"
+  end
+
+  test "fanout pr renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   ["pr", "run-1", "coverage-01", "--root", "/tmp/fanout", "--json"],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    assert_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["assignment_id"] == "coverage-01"
+    assert decoded["state"] == "opened"
   end
 
   test "fanout status renders json through the adapter boundary" do
@@ -348,6 +459,38 @@ defmodule JX.CLI.FanoutTest do
     assert output =~ "fanout report accepted"
   end
 
+  test "fanout report renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   [
+                     "report",
+                     "run-1",
+                     "--root",
+                     "/tmp/fanout",
+                     "--assignment-id",
+                     "coverage-01",
+                     "--report-id",
+                     "rpt-1",
+                     "--agent-id",
+                     "agent-1",
+                     "--sequence",
+                     "1",
+                     "--state",
+                     "in_progress",
+                     "--json"
+                   ],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["status"] == "accepted"
+  end
+
   test "fanout ownership passes warn-only and renders warnings" do
     output =
       capture_io(fn ->
@@ -364,6 +507,23 @@ defmodule JX.CLI.FanoutTest do
     assert opts[:root] == "/tmp/fanout"
     assert opts[:warn_only] == true
     assert output =~ "outside write ownership"
+  end
+
+  test "fanout ownership renders json output" do
+    output =
+      capture_io(fn ->
+        assert :ok =
+                 Fanout.run(
+                   ["ownership", "run-1", "coverage-01", "--root", "/tmp/fanout", "--json"],
+                   fanout: FakeFanout,
+                   start_app: start_app_callback()
+                 )
+      end)
+
+    refute_received :started
+    decoded = Jason.decode!(output)
+    assert decoded["assignment_id"] == "coverage-01"
+    assert decoded["status"] == "warn"
   end
 
   defp start_app_callback do

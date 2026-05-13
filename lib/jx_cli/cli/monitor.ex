@@ -123,7 +123,10 @@ defmodule JX.CLI.Monitor do
 
   defp monitor_loop(opts, iterations, interval_ms, run_opts, iteration) do
     with {:ok, scan} <- apply(run_opts[:workspace], :monitor_scan, [opts]) do
-      IO.puts("monitor iteration #{iteration}")
+      unless run_opts[:json] do
+        IO.puts("monitor iteration #{iteration}")
+      end
+
       print_monitor_scan(scan, run_opts)
 
       if iterations == 0 or iteration < iterations do
@@ -288,7 +291,8 @@ defmodule JX.CLI.Monitor do
     end
   end
 
-  defp print_monitor_events([], opts) do
+  @doc false
+  def print_monitor_events([], opts) do
     if opts[:json] do
       print_json(%{events: []})
     else
@@ -296,7 +300,8 @@ defmodule JX.CLI.Monitor do
     end
   end
 
-  defp print_monitor_events(events, opts) do
+  @doc false
+  def print_monitor_events(events, opts) do
     if opts[:json] do
       print_json(%{events: Enum.map(events, &json_monitor_event/1)})
     else
@@ -391,11 +396,13 @@ defmodule JX.CLI.Monitor do
     print_table(["WATCH", "FROM", "TO", "MODE", "REPO", "PR", "REF", "SUMMARY"], rows)
   end
 
-  defp print_notifications([], opts) do
+  @doc false
+  def print_notifications([], opts) do
     if opts[:json], do: print_json(%{notifications: []}), else: IO.puts("no notifications")
   end
 
-  defp print_notifications(notifications, opts) do
+  @doc false
+  def print_notifications(notifications, opts) do
     if opts[:json] do
       print_json(%{notifications: Enum.map(notifications, &json_notification/1)})
     else
@@ -798,12 +805,13 @@ defmodule JX.CLI.Monitor do
     end
   end
 
-  defp summary_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp summary_value(value) when is_boolean(value), do: format_bool(value)
-  defp summary_value(value) when is_binary(value), do: value
-  defp summary_value(%_struct{} = value), do: to_string(value)
-  defp summary_value(nil), do: ""
-  defp summary_value(value), do: inspect(value)
+  @doc false
+  def summary_value(value) when is_integer(value), do: Integer.to_string(value)
+  def summary_value(value) when is_boolean(value), do: format_bool(value)
+  def summary_value(value) when is_binary(value), do: value
+  def summary_value(%_struct{} = value), do: to_string(value)
+  def summary_value(nil), do: ""
+  def summary_value(value), do: inspect(value)
 
   defp session_queue_refs(%{items: items}) do
     items

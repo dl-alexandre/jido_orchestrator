@@ -23,10 +23,12 @@ defmodule JX.CLI.Cleanup do
       resource_type: parsed[:type]
     ]
 
+    workspace = opts[:workspace] || ResourceOwnerships
+
     with :ok <- validate_options(invalid),
          :ok <- expect_no_args(rest, @usage),
          :ok <- apply(opts[:start_app], []),
-         {:ok, report} <- ResourceOwnerships.ownership_audit(audit_opts) do
+         {:ok, report} <- apply(workspace, :ownership_audit, [audit_opts]) do
       print_audit(report, json: parsed[:json] || false)
       :ok
     end
@@ -44,11 +46,13 @@ defmodule JX.CLI.Cleanup do
         ]
       )
 
+    workspace = opts[:workspace] || ResourceOwnerships
+
     with :ok <- validate_options(invalid),
          :ok <- expect_no_args(rest, @usage),
          :ok <- validate_mode(parsed),
          :ok <- apply(opts[:start_app], []),
-         {:ok, report} <- cleanup(parsed) do
+         {:ok, report} <- cleanup(parsed, workspace) do
       print_report(report, json: parsed[:json] || false)
       :ok
     end
@@ -102,16 +106,16 @@ defmodule JX.CLI.Cleanup do
     end
   end
 
-  defp cleanup(opts) do
+  defp cleanup(opts, workspace) do
     cleanup_opts = [
       owner_project: opts[:owner_project],
       resource_type: opts[:type]
     ]
 
     if opts[:apply] do
-      ResourceOwnerships.cleanup_apply(cleanup_opts)
+      apply(workspace, :cleanup_apply, [cleanup_opts])
     else
-      ResourceOwnerships.cleanup_dry_run(cleanup_opts)
+      apply(workspace, :cleanup_dry_run, [cleanup_opts])
     end
   end
 

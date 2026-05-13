@@ -1,5 +1,6 @@
 Application.stop(:jx)
 Application.put_env(:jx, :ssh_adapter, JX.SSH.Fake)
+Application.put_env(:jx, :local_adapter, JX.SSH.Fake)
 
 test_db =
   :jx

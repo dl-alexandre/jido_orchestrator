@@ -1141,7 +1141,223 @@ defmodule JX.FanoutTest do
                state: "local_validated",
                reported_at: "2026-05-08T12:05:00Z",
                data: %{"validation" => "passed"}
-             })
+              })
+  end
+
+  test "to_map(%RunManifest{}) returns the expected map" do
+    manifest = %Fanout.RunManifest{
+      run_id: "r1",
+      plan_id: "p1",
+      repo: "my-repo",
+      baseline: "abc123",
+      base_branch: "main",
+      created_at: "2026-01-01T00:00:00Z",
+      publishability_contract: %{"required" => ["clean"]},
+      assignments: [%{"id" => "a1"}],
+      evidence: %{"preflight_report" => "report.md"}
+    }
+
+    map = Fanout.to_map(manifest)
+    assert map["run_id"] == "r1"
+    assert map["plan_id"] == "p1"
+    assert map["repo"] == "my-repo"
+    assert map["baseline"] == "abc123"
+    assert map["base_branch"] == "main"
+    assert map["created_at"] == "2026-01-01T00:00:00Z"
+    assert map["publishability_contract"] == %{"required" => ["clean"]}
+    assert map["assignments"] == [%{"id" => "a1"}]
+    assert map["evidence"] == %{"preflight_report" => "report.md"}
+  end
+
+  test "dynamic_coverage_opts?/1 returns true when relevant opts are present" do
+    assert Fanout.dynamic_coverage_opts?(coverage_file: "coverage.csv")
+    assert Fanout.dynamic_coverage_opts?(coverage_modules: [%{path: "lib/a.ex"}])
+    assert Fanout.dynamic_coverage_opts?(host_count: 2)
+    assert Fanout.dynamic_coverage_opts?(risk_rules: %{"high" => 40})
+  end
+
+  test "dynamic_coverage_opts?/1 returns false when opts are absent or empty" do
+    refute Fanout.dynamic_coverage_opts?([])
+    refute Fanout.dynamic_coverage_opts?(coverage_file: nil)
+    refute Fanout.dynamic_coverage_opts?(coverage_file: "")
+    refute Fanout.dynamic_coverage_opts?(coverage_modules: [])
+    refute Fanout.dynamic_coverage_opts?(host_count: nil)
+    refute Fanout.dynamic_coverage_opts?(risk_rules: nil)
+  end
+
+  test "pad_dynamic_hosts/2 handles empty list, exact count, and padding" do
+    assert Fanout.pad_dynamic_hosts([], 3) == ["host-1", "host-2", "host-3"]
+    assert Fanout.pad_dynamic_hosts(["h1", "h2"], 2) == ["h1", "h2"]
+    assert Fanout.pad_dynamic_hosts(["h1"], 3) == ["h1", "host-2", "host-3"]
+  end
+
+  test "pad_list/2 handles exact count and padding" do
+    assert Fanout.pad_list(["a", "b"], 2) == ["a", "b"]
+    assert Fanout.pad_list(["a"], 3) == ["a", "", ""]
+  end
+
+  test "parse_coverage/1 handles numbers, percentages, plain binaries, and invalid values" do
+    assert Fanout.parse_coverage(20) == 20.0
+    assert Fanout.parse_coverage(20.5) == 20.5
+    assert Fanout.parse_coverage("44.5%") == 44.5
+    assert Fanout.parse_coverage("44.5") == 44.5
+    assert Fanout.parse_coverage("nope") == 0.0
+    assert Fanout.parse_coverage(nil) == 0.0
+    assert Fanout.parse_coverage([]) == 0.0
+  end
+
+  test "default_risk_weights/0 returns the expected map" do
+    assert Fanout.default_risk_weights() == %{
+             "critical" => 60,
+             "high" => 35,
+             "medium" => 15,
+             "low" => 0
+           }
+  end
+
+  test "test_path_for_source/1 derives test path from lib/ paths and passes through others" do
+    assert Fanout.test_path_for_source("lib/one/api/token.ex") ==
+             "test/one/api/token_test.exs"
+
+    assert Fanout.test_path_for_source("README.md") == "README.md"
+  end
+
+  test "format_coverage/1 formats floats and converts other types" do
+    assert Fanout.format_coverage(44.5) == "44.5"
+    assert Fanout.format_coverage(nil) == ""
+    assert Fanout.format_coverage("abc") == "abc"
+  end
+
+  test "module_name_from_path/1 handles nil and paths with extensions" do
+    assert Fanout.module_name_from_path(nil) == nil
+    assert Fanout.module_name_from_path("lib/one/api/token.ex") == "token"
+    assert Fanout.module_name_from_path("token.ex") == "token"
+  end
+
+  test "normalize_coverage_module/1 normalizes maps, binaries, and other values" do
+    assert Fanout.normalize_coverage_module(%{
+             path: "lib/a.ex",
+             coverage: 20,
+             risk: "high"
+           }) == %{
+             module: "a",
+             path: "lib/a.ex",
+             coverage: 20.0,
+             risk: "high"
+           }
+
+    assert Fanout.normalize_coverage_module(%{
+             name: "Token",
+             file: "lib/token.ex",
+             covered: "10%"
+           }) == %{
+             module: "Token",
+             path: "lib/token.ex",
+             coverage: 10.0,
+             risk: "medium"
+           }
+
+    assert Fanout.normalize_coverage_module("lib/a.ex") == %{
+             module: "a",
+             path: "lib/a.ex",
+             coverage: 0.0,
+             risk: "medium"
+           }
+
+    assert Fanout.normalize_coverage_module(nil) == nil
+    assert Fanout.normalize_coverage_module(123) == nil
+  end
+
+  test "coverage_score/2 calculates deficit plus risk weight" do
+    module = %{coverage: 80.0, risk: "medium"}
+    assert Fanout.coverage_score(module, %{}) == 35.0
+
+    module2 = %{coverage: 50.0, risk: "critical"}
+    rules = %{"risk_weights" => %{"critical" => 100}}
+    assert Fanout.coverage_score(module2, rules) == 150.0
+  end
+
+  test "balance_coverage_modules/3 distributes modules greedily across hosts" do
+    modules = [
+      %{path: "lib/a.ex", coverage: 20.0, risk: "high"},
+      %{path: "lib/b.ex", coverage: 35.0, risk: "medium"},
+      %{path: "lib/c.ex", coverage: 10.0, risk: "critical"},
+      %{path: "lib/d.ex", coverage: 65.0, risk: "low"}
+    ]
+
+    [b1, b2] = Fanout.balance_coverage_modules(modules, 2, %{})
+
+    assert length(b1.modules) + length(b2.modules) == 4
+
+    assigned_paths =
+      Enum.flat_map([b1, b2], fn bucket ->
+        Enum.map(bucket.modules, & &1.path)
+      end)
+
+    assert Enum.sort(assigned_paths) == Enum.sort(Enum.map(modules, & &1.path))
+  end
+
+  test "first_present/1 returns first non-blank value" do
+    assert Fanout.first_present([nil, "", "a", "b"]) == "a"
+    assert Fanout.first_present(["", nil]) == nil
+    assert Fanout.first_present(["x"]) == "x"
+    assert Fanout.first_present([]) == nil
+  end
+
+  test "blank?/1 identifies blank values" do
+    assert Fanout.blank?(nil)
+    assert Fanout.blank?("")
+    assert Fanout.blank?("  ")
+    refute Fanout.blank?("a")
+    refute Fanout.blank?([])
+    refute Fanout.blank?(true)
+  end
+
+  test "stringify_keys/1 converts atom keys to string keys recursively" do
+    assert Fanout.stringify_keys(%{a: 1, b: %{c: 2}}) == %{
+             "a" => 1,
+             "b" => %{"c" => 2}
+           }
+
+    assert Fanout.stringify_keys([%{a: 1}]) == [%{"a" => 1}]
+    assert Fanout.stringify_keys("plain") == "plain"
+  end
+
+  test "normalize_list/1 normalizes nil, lists, and other values" do
+    assert Fanout.normalize_list(nil) == []
+    assert Fanout.normalize_list([" a ", "b", ""]) == ["a", "b"]
+    assert Fanout.normalize_list("single") == ["single"]
+    assert Fanout.normalize_list(123) == []
+  end
+
+  test "relative_path/2 computes path relative to root" do
+    root = "/tmp/jx/runs/run-1"
+    path = "/tmp/jx/runs/run-1/assignments/a.json"
+    assert Fanout.relative_path(root, path) == "run-1/assignments/a.json"
+  end
+
+  test "validate_path_id/2 validates path identifiers" do
+    assert Fanout.validate_path_id("valid-id", "label") == :ok
+
+    assert Fanout.validate_path_id("..", "label") ==
+             {:error, "label contains path separators or dot segments"}
+
+    assert Fanout.validate_path_id("a/b", "label") ==
+             {:error, "label contains path separators or dot segments"}
+
+    assert Fanout.validate_path_id("", "label") == {:error, "label is required"}
+    assert Fanout.validate_path_id(nil, "label") == {:error, "label is required"}
+  end
+
+  test "safe_child_path/2 validates child paths" do
+    assert {:ok, path} = Fanout.safe_child_path("/tmp", ["a", "b"])
+    assert path == Path.expand("/tmp/a/b")
+
+    assert {:error, "path escapes fanout run root: " <> _} =
+             Fanout.safe_child_path("/tmp", ["..", "b"])
+
+    assert {:ok, path2} = Fanout.safe_child_path("/tmp", ["a/b"])
+    assert path2 == Path.expand("/tmp/a/b")
   end
 
   defp preflight_output(failing_check \\ nil) do
@@ -1164,3 +1380,4 @@ defmodule JX.FanoutTest do
     |> Enum.join("\n")
   end
 end
+

@@ -4208,6 +4208,359 @@ defmodule JX.WorkspaceTest do
     assert log_path == task.log_path
   end
 
+  test "repo_gate evaluates instance eligibility and aggregates reasons" do
+    Process.put(:fake_ssh_repo_doctors, %{
+      "build-1" => """
+      jx-repo-doctor\t1
+      repo_path\t/srv/repos/saysure
+      status\tok
+      branch\tdevelop
+      head\tabc123
+      upstream\torigin/develop
+      remote\torigin
+      remote_url\tgit@example.test:saysure.git
+      remote_refs_start
+      abc123\trefs/heads/develop
+      remote_refs_end
+      remote_status\t0
+      status_short_start
+      ## develop...origin/develop
+      status_short_end
+      worktree_start
+      worktree /srv/repos/saysure
+      HEAD abc123
+      branch refs/heads/develop
+      worktree_end
+      branches_start
+      develop\torigin/develop\t\tabc123\tdevelop commit
+      branches_end
+      """
+    })
+
+    assert {:ok, gate} = Workspace.repo_gate("saysure")
+    assert gate.project == "saysure"
+    # push_allowed defaults to "unknown" from repo_doctor, which gates promotion
+    assert gate.eligible == false
+    assert gate.status == "blocked"
+    assert "push_not_verified" in gate.reasons
+    assert gate.summary.total == 1
+    assert gate.summary.allowed == 0
+    assert gate.summary.blocked == 1
+    assert [%{host: "build-1", eligible: false, status: "blocked"}] = gate.instances
+  end
+
+  test "repo_gate aggregates blocked reasons and required fixes across degraded instances" do
+    Process.put(:fake_ssh_repo_doctors, %{
+      "build-1" => """
+      jx-repo-doctor\t1
+      repo_path\t/srv/repos/saysure
+      status\tok
+      branch\tdevelop
+      head\tabc123
+      upstream\torigin/develop
+      remote\torigin
+      remote_url\thttps://github.com/example/private.git
+      remote_refs_start
+      remote: Invalid username or token.
+      fatal: Authentication failed
+      remote_refs_end
+      remote_status\t128
+      tracking_refs_start
+      abc123\trefs/remotes/origin/develop
+      tracking_refs_end
+      status_short_start
+      ## develop...origin/develop
+      status_short_end
+      worktree_start
+      worktree /srv/repos/saysure
+      HEAD abc123
+      branch refs/heads/develop
+      worktree_end
+      branches_start
+      develop\torigin/develop\t\tabc123\tdevelop commit
+      branches_end
+      """
+    })
+
+    assert {:ok, gate} = Workspace.repo_gate("saysure")
+    assert gate.eligible == false
+    assert gate.status == "blocked"
+    assert gate.summary.total == 1
+    assert gate.summary.allowed == 0
+    assert gate.summary.blocked == 1
+    assert gate.reasons != []
+    assert gate.required_fixes != []
+    assert [%{host: "build-1", eligible: false, status: "blocked"}] = gate.instances
+  end
+
+  test "project_gate returns no_hosts when project is not found" do
+    assert {:ok, gate} = Workspace.project_gate("missing-project")
+    assert gate.eligible == false
+    assert gate.status == "blocked"
+    assert gate.reasons == ["no_hosts_registered"]
+    assert gate.hosts == []
+  end
+
+  test "project_gate evaluates project eligibility from repo gate" do
+    Process.put(:fake_ssh_repo_doctors, %{
+      "build-1" => """
+      jx-repo-doctor\t1
+      repo_path\t/srv/repos/saysure
+      status\tok
+      branch\tdevelop
+      head\tabc123
+      upstream\torigin/develop
+      remote\torigin
+      remote_url\tgit@example.test:saysure.git
+      remote_refs_start
+      abc123\trefs/heads/develop
+      remote_refs_end
+      remote_status\t0
+      status_short_start
+      ## develop...origin/develop
+      status_short_end
+      worktree_start
+      worktree /srv/repos/saysure
+      HEAD abc123
+      branch refs/heads/develop
+      worktree_end
+      branches_start
+      develop\torigin/develop\t\tabc123\tdevelop commit
+      branches_end
+      """
+    })
+
+    assert {:ok, gate} = Workspace.project_gate("saysure")
+    # push_allowed defaults to "unknown" from repo_doctor, which gates promotion
+    assert gate.eligible == false
+    assert gate.status == "blocked"
+    assert [%{host: "build-1", eligible: false}] = gate.hosts
+  end
+
+  test "project_brief builds a comprehensive project brief" do
+    Process.put(:fake_ssh_tmux_capture, "Would you like me to run the next command?")
+
+    {:ok, brief} = Workspace.project_brief("saysure", limit: 5)
+    assert brief.project.name == "saysure"
+    assert brief.headline != nil
+    assert brief.next != nil
+    assert brief.mode != nil
+    assert is_map(brief.counts)
+    assert is_list(brief.agenda)
+    assert is_list(brief.notifications)
+    assert is_list(brief.ci_watches)
+    assert is_list(brief.handoffs)
+    assert is_list(brief.delegations)
+    assert is_list(brief.wake_triggers)
+    assert brief.headline != nil
+    assert brief.next != nil
+  end
+
+  test "call_brief builds a call brief from orchestration state" do
+    Process.put(:fake_ssh_tmux_capture, "Would you like me to run the next command?")
+
+    assert {:ok, call_brief} = Workspace.call_brief(limit: 5)
+    assert call_brief.surface == "call"
+    assert call_brief.mode == "brief"
+    assert call_brief.headline != nil
+    assert is_map(call_brief.operator)
+    assert is_map(call_brief.orchestrator)
+    assert is_list(call_brief.agenda)
+    assert is_list(call_brief.projects)
+    assert is_list(call_brief.notifications)
+    assert is_list(call_brief.watches)
+    assert is_list(call_brief.handoffs)
+    assert is_list(call_brief.delegations)
+    assert is_list(call_brief.delegation_reviews)
+  end
+
+  test "wake rejects an empty message" do
+    assert {:error, "wake requires a non-empty message"} = Workspace.wake(%{message: "", summary: "  "})
+  end
+
+  test "wake rejects an unsupported severity" do
+    assert {:error, error} = Workspace.wake(%{message: "test wake", severity: "fatal"})
+    assert error =~ "unsupported monitor severity"
+    assert error =~ "fatal"
+  end
+
+  test "manage rejects an unsupported policy" do
+    assert {:error, {:unsupported_manage_policy, "aggressive"}} =
+             Workspace.manage(policy: "aggressive")
+  end
+
+  test "policy_check classifies known and unknown release actions" do
+    assert Workspace.policy_check("commit").decision == "allowed"
+    assert Workspace.policy_check("push").decision == "allowed"
+    assert Workspace.policy_check("force-push").confirmation == "required"
+
+    unknown = Workspace.policy_check("deploy_to_orbit")
+    assert unknown.decision == "hold"
+    assert unknown.confirmation == "required"
+  end
+
+  test "orchestrator_decide returns error for invalid actions" do
+    Process.put(:fake_ssh_tmux_capture, "Ready for the next instruction.")
+
+    {:ok, snapshot} = Workspace.snapshot_sessions(host_name: "build-1", type: "agent")
+    [%{ref: ref}] = snapshot.sessions
+
+    assert {:error, :invalid_orchestrator_decision} =
+             Workspace.orchestrator_decide(ref, %{action: "deploy"})
+  end
+
+  test "snapshot_sessions can filter by ref" do
+    Process.put(:fake_ssh_tmux_capture, "Would you like me to run the next command?")
+
+    {:ok, report} = Workspace.snapshot_sessions(host_name: "build-1", type: "agent")
+    [%{ref: ref}] = report.sessions
+
+    {:ok, filtered} = Workspace.snapshot_sessions(host_name: "build-1", type: "agent", ref: ref)
+    assert length(filtered.sessions) == 1
+    assert hd(filtered.sessions).ref == ref
+
+    {:ok, empty} = Workspace.snapshot_sessions(host_name: "build-1", type: "agent", ref: "nonexistent")
+    assert empty.sessions == []
+  end
+
+  test "work_board can filter by ref" do
+    Process.put(:fake_ssh_tmux_capture, "Would you like me to run the next command?")
+
+    {:ok, board} = Workspace.work_board(host_name: "build-1", type: "agent")
+    [%{ref: ref}] = board.items
+
+    {:ok, filtered} = Workspace.work_board(host_name: "build-1", type: "agent", ref: ref)
+    assert length(filtered.items) == 1
+    assert hd(filtered.items).ref == ref
+
+    {:ok, empty} = Workspace.work_board(host_name: "build-1", type: "agent", ref: "nonexistent")
+    assert empty.items == []
+  end
+
+  test "capacity_host assesses probed resources and computes recommendation" do
+    Process.put(:fake_ssh_capacity_ram, "32768 24576\n")
+    Process.put(:fake_ssh_capacity_disk, "204800 102400\n")
+    Process.put(:fake_ssh_capacity_cpu, "16\n")
+
+    assert {:ok, result} = Workspace.capacity_host("build-1")
+    assert result.host == "build-1"
+    assert result.resources.ram_total_mb == 32768
+    assert result.resources.ram_available_mb == 24576
+    assert result.resources.disk_total_mb == 204800
+    assert result.resources.disk_available_mb == 102400
+    assert result.resources.cpu_cores == 16
+    assert result.formula_recommended > 0
+    assert result.recommended_worktrees == result.formula_recommended
+    assert result.limit_source == :formula
+  end
+
+  test "capacity_hosts aggregates assessments across all hosts" do
+    Process.put(:fake_ssh_capacity_ram, "16384 8192\n")
+    Process.put(:fake_ssh_capacity_disk, "204800 102400\n")
+    Process.put(:fake_ssh_capacity_cpu, "8\n")
+
+    assert {:ok, report} = Workspace.capacity_hosts()
+    assert report.generated_at
+    assert length(report.results) == 1
+    assert [%{host: "build-1"}] = report.results
+  end
+
+  test "evaluate_capacity reports insufficient data without observations" do
+    assert {:ok, result} = Workspace.evaluate_capacity("build-1")
+    assert result.host == "build-1"
+    assert result.verdict == :insufficient_data
+    assert result.suggested_limit == nil
+    assert result.observations_analysed == 0
+    assert result.reasoning =~ "Need at least"
+  end
+
+  test "evaluate_all_capacity evaluates every registered host" do
+    assert {:ok, report} = Workspace.evaluate_all_capacity()
+    assert length(report.results) == 1
+    assert [%{host: "build-1", verdict: :insufficient_data}] = report.results
+  end
+
+  test "promotion_preflight returns blocked when project gate has unverified push" do
+    Process.put(:fake_ssh_repo_doctors, %{
+      "build-1" => """
+      jx-repo-doctor\t1
+      repo_path\t/srv/repos/saysure
+      status\tok
+      branch\tdevelop
+      head\tabc123
+      upstream\torigin/develop
+      remote\torigin
+      remote_url\tgit@example.test:saysure.git
+      remote_refs_start
+      abc123\trefs/heads/develop
+      remote_refs_end
+      remote_status\t0
+      status_short_start
+      ## develop...origin/develop
+      status_short_end
+      worktree_start
+      worktree /srv/repos/saysure
+      HEAD abc123
+      branch refs/heads/develop
+      worktree_end
+      branches_start
+      develop\torigin/develop\t\tabc123\tdevelop commit
+      branches_end
+      """
+    })
+
+    assert {:ok, preflight} =
+             Workspace.promotion_preflight("saysure", "develop", "master")
+
+    assert preflight.project == "saysure"
+    assert preflight.source_branch == "develop"
+    assert preflight.target_branch == "master"
+    assert preflight.eligible == false
+    assert preflight.status == "blocked"
+    assert Enum.any?(preflight.reasons, &String.contains?(&1, "push_not_verified"))
+  end
+
+  test "promotion_preflight returns blocked when project gate is not eligible" do
+    Process.put(:fake_ssh_repo_doctors, %{
+      "build-1" => """
+      jx-repo-doctor\t1
+      repo_path\t/srv/repos/saysure
+      status\tok
+      branch\tdevelop
+      head\tabc123
+      upstream\torigin/develop
+      remote\torigin
+      remote_url\thttps://github.com/example/private.git
+      remote_refs_start
+      remote: Invalid username or token.
+      fatal: Authentication failed
+      remote_refs_end
+      remote_status\t128
+      tracking_refs_start
+      abc123\trefs/remotes/origin/develop
+      tracking_refs_end
+      status_short_start
+      ## develop...origin/develop
+      status_short_end
+      worktree_start
+      worktree /srv/repos/saysure
+      HEAD abc123
+      branch refs/heads/develop
+      worktree_end
+      branches_start
+      develop\torigin/develop\t\tabc123\tdevelop commit
+      branches_end
+      """
+    })
+
+    assert {:ok, preflight} =
+             Workspace.promotion_preflight("saysure", "develop", "master")
+
+    assert preflight.eligible == false
+    assert preflight.status == "blocked"
+    assert preflight.reasons != []
+  end
+
   defp assert_ssh_script_containing(pattern) do
     receive do
       {:ssh_script, script} ->

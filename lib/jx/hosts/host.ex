@@ -16,6 +16,10 @@ defmodule JX.Hosts.Host do
     field(:ssh_target, :string)
     field(:workspace_path, :string)
 
+    # Operator-set ceiling on concurrent worktree sessions.
+    # When set, this overrides the hardware-probed formula in JX.HostCapacity.
+    field(:capacity_limit, :integer)
+
     has_many(:projects, JX.Projects.Project)
     has_many(:directives, JX.Directives.Directive)
 
@@ -24,13 +28,14 @@ defmodule JX.Hosts.Host do
 
   def changeset(host, attrs) do
     host
-    |> cast(attrs, [:name, :transport, :ssh_target, :workspace_path])
+    |> cast(attrs, [:name, :transport, :ssh_target, :workspace_path, :capacity_limit])
     |> update_change(:name, &trim/1)
     |> update_change(:transport, &trim/1)
     |> update_change(:ssh_target, &trim/1)
     |> update_change(:workspace_path, &clean_path/1)
     |> normalize_local_target()
     |> validate_required([:name, :transport, :workspace_path])
+    |> validate_number(:capacity_limit, greater_than: 0)
     |> validate_inclusion(:transport, @transports)
     |> validate_ssh_target()
     |> validate_ssh_target_shape()

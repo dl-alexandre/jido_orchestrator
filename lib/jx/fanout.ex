@@ -463,7 +463,7 @@ defmodule JX.Fanout do
     dynamic_coverage_assignments(run_id, baseline, opts, run_path)
   end
 
-  defp dynamic_coverage_opts?(opts) do
+  def dynamic_coverage_opts?(opts) do
     Enum.any?([:coverage_file, :coverage_modules, :host_count, :risk_rules], fn key ->
       case Keyword.get(opts, key) do
         nil -> false
@@ -726,7 +726,7 @@ defmodule JX.Fanout do
     end
   end
 
-  defp normalize_coverage_module(attrs) when is_map(attrs) do
+  def normalize_coverage_module(attrs) when is_map(attrs) do
     attrs = stringify_keys(attrs)
     path = first_present([attrs["path"], attrs["file"], attrs["source"]])
     module = first_present([attrs["module"], attrs["name"], module_name_from_path(path)])
@@ -743,22 +743,22 @@ defmodule JX.Fanout do
     end
   end
 
-  defp normalize_coverage_module(value) when is_binary(value),
+  def normalize_coverage_module(value) when is_binary(value),
     do: normalize_coverage_module(%{"path" => value})
 
-  defp normalize_coverage_module(_value), do: nil
+  def normalize_coverage_module(_value), do: nil
 
-  defp module_name_from_path(nil), do: nil
+  def module_name_from_path(nil), do: nil
 
-  defp module_name_from_path(path) do
+  def module_name_from_path(path) do
     path
     |> to_string()
     |> Path.basename(Path.extname(to_string(path)))
   end
 
-  defp parse_coverage(value) when is_number(value), do: value * 1.0
+  def parse_coverage(value) when is_number(value), do: value * 1.0
 
-  defp parse_coverage(value) when is_binary(value) do
+  def parse_coverage(value) when is_binary(value) do
     value =
       value
       |> String.trim()
@@ -770,7 +770,7 @@ defmodule JX.Fanout do
     end
   end
 
-  defp parse_coverage(_value), do: 0.0
+  def parse_coverage(_value), do: 0.0
 
   defp dynamic_hosts(opts) do
     hosts =
@@ -794,13 +794,13 @@ defmodule JX.Fanout do
     end
   end
 
-  defp pad_dynamic_hosts([], host_count) do
+  def pad_dynamic_hosts([], host_count) do
     Enum.map(1..host_count, &"host-#{&1}")
   end
 
-  defp pad_dynamic_hosts(hosts, host_count) when length(hosts) >= host_count, do: hosts
+  def pad_dynamic_hosts(hosts, host_count) when length(hosts) >= host_count, do: hosts
 
-  defp pad_dynamic_hosts(hosts, host_count) do
+  def pad_dynamic_hosts(hosts, host_count) do
     hosts ++ Enum.map((length(hosts) + 1)..host_count, &"host-#{&1}")
   end
 
@@ -848,8 +848,8 @@ defmodule JX.Fanout do
     )
   end
 
-  defp pad_list(list, count) when length(list) >= count, do: list
-  defp pad_list(list, count), do: list ++ List.duplicate("", count - length(list))
+  def pad_list(list, count) when length(list) >= count, do: list
+  def pad_list(list, count), do: list ++ List.duplicate("", count - length(list))
 
   defp coverage_risk_rules(opts) do
     rules = opts[:risk_rules] || %{}
@@ -887,7 +887,7 @@ defmodule JX.Fanout do
     end)
   end
 
-  defp balance_coverage_modules(modules, host_count, risk_rules) do
+  def balance_coverage_modules(modules, host_count, risk_rules) do
     empty_buckets = Enum.map(1..host_count, fn _index -> %{score: 0.0, modules: []} end)
 
     modules
@@ -906,14 +906,14 @@ defmodule JX.Fanout do
     end)
   end
 
-  defp coverage_score(module, risk_rules) do
+  def coverage_score(module, risk_rules) do
     deficit = max(0.0, 100.0 - module.coverage)
     weights = Map.get(risk_rules, "risk_weights", %{})
     risk_weight = Map.get(weights, module.risk, Map.get(default_risk_weights(), module.risk, 15))
     deficit + risk_weight
   end
 
-  defp default_risk_weights do
+  def default_risk_weights do
     %{"critical" => 60, "high" => 35, "medium" => 15, "low" => 0}
   end
 
@@ -938,12 +938,12 @@ defmodule JX.Fanout do
     }
   end
 
-  defp test_path_for_source("lib/" <> rest) do
+  def test_path_for_source("lib/" <> rest) do
     root = Path.rootname(rest)
     "test/#{root}_test.exs"
   end
 
-  defp test_path_for_source(path), do: path
+  def test_path_for_source(path), do: path
 
   defp dynamic_objective(modules, opts) do
     prefix =
@@ -960,11 +960,11 @@ defmodule JX.Fanout do
     "#{prefix} Modules: #{module_lines}."
   end
 
-  defp format_coverage(number) when is_float(number) do
+  def format_coverage(number) when is_float(number) do
     :erlang.float_to_binary(number, decimals: 1)
   end
 
-  defp format_coverage(number), do: to_string(number)
+  def format_coverage(number), do: to_string(number)
 
   defp assignment(run_id, baseline, base_branch, attrs, run_path) do
     validation_sequence =
@@ -2479,7 +2479,7 @@ defmodule JX.Fanout do
     File.exists?(accepted_report_path(run_path, report))
   end
 
-  defp relative_path(run_path, path) do
+  def relative_path(run_path, path) do
     Path.relative_to(path, Path.dirname(run_path))
   end
 
@@ -2490,7 +2490,7 @@ defmodule JX.Fanout do
     end
   end
 
-  defp safe_child_path(root, parts) do
+  def safe_child_path(root, parts) do
     root = Path.expand(root)
     path = Path.expand(Path.join([root | parts]))
 
@@ -2503,7 +2503,7 @@ defmodule JX.Fanout do
 
   defp inside_path?(path, root), do: path == root or String.starts_with?(path, root <> "/")
 
-  defp validate_path_id(value, label) when is_binary(value) do
+  def validate_path_id(value, label) when is_binary(value) do
     value = String.trim(value)
 
     cond do
@@ -2521,16 +2521,16 @@ defmodule JX.Fanout do
     end
   end
 
-  defp validate_path_id(_value, label), do: {:error, "#{label} is required"}
+  def validate_path_id(_value, label), do: {:error, "#{label} is required"}
 
   defp normalize_text(value) when is_binary(value), do: String.trim(value)
   defp normalize_text(value), do: value
 
-  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank?(nil), do: true
-  defp blank?(_value), do: false
+  def blank?(value) when is_binary(value), do: String.trim(value) == ""
+  def blank?(nil), do: true
+  def blank?(_value), do: false
 
-  defp first_present(values) do
+  def first_present(values) do
     Enum.find(values, fn value ->
       not blank?(value)
     end)
@@ -2539,16 +2539,16 @@ defmodule JX.Fanout do
   defp warn_if(warnings, true, warning), do: warnings ++ [warning]
   defp warn_if(warnings, false, _warning), do: warnings
 
-  defp normalize_list(nil), do: []
+  def normalize_list(nil), do: []
 
-  defp normalize_list(value) when is_binary(value) do
+  def normalize_list(value) when is_binary(value) do
     case Jason.decode(value) do
       {:ok, list} when is_list(list) -> normalize_list(list)
       _other -> normalize_list([value])
     end
   end
 
-  defp normalize_list(values) when is_list(values) do
+  def normalize_list(values) when is_list(values) do
     values
     |> Enum.map(&to_string/1)
     |> Enum.map(&String.trim/1)
@@ -2556,7 +2556,7 @@ defmodule JX.Fanout do
     |> Enum.uniq()
   end
 
-  defp normalize_list(_value), do: []
+  def normalize_list(_value), do: []
 
   defp normalize_path_segments([], acc), do: Enum.reverse(acc)
   defp normalize_path_segments(["." | rest], acc), do: normalize_path_segments(rest, acc)
@@ -2594,10 +2594,10 @@ defmodule JX.Fanout do
   defp atomize_nested(list) when is_list(list), do: Enum.map(list, &atomize_nested/1)
   defp atomize_nested(value), do: value
 
-  defp stringify_keys(%{} = map) do
+  def stringify_keys(%{} = map) do
     Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
   end
 
-  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
-  defp stringify_keys(value), do: value
+  def stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  def stringify_keys(value), do: value
 end

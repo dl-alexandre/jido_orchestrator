@@ -69,6 +69,16 @@ defmodule JX.SSH.Fake do
       String.contains?(script, "jx-process-cwd") ->
         {:ok, Process.get(:fake_ssh_process_cwd, "/srv/repos/saysure\n")}
 
+      # Host capacity probes
+      String.contains?(script, "hw.memsize") ->
+        {:ok, Process.get(:fake_ssh_capacity_ram, "16384 8192\n")}
+
+      String.contains?(script, "df -m") ->
+        {:ok, Process.get(:fake_ssh_capacity_disk, "204800 102400\n")}
+
+      String.contains?(script, "hw.logicalcpu") ->
+        {:ok, Process.get(:fake_ssh_capacity_cpu, "8\n")}
+
       true ->
         {:ok, "ready\n"}
     end

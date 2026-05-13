@@ -1552,6 +1552,805 @@ defmodule JX.DelegatedExecutionTest do
     }
   end
 
+  test "status helpers expose entity status lists" do
+    assert is_list(DelegatedExecution.agent_statuses())
+    assert "idle" in DelegatedExecution.agent_statuses()
+    assert is_list(DelegatedExecution.assignment_statuses())
+    assert "created" in DelegatedExecution.assignment_statuses()
+    assert is_list(DelegatedExecution.runner_statuses())
+    assert "idle" in DelegatedExecution.runner_statuses()
+    assert is_list(DelegatedExecution.runner_session_statuses())
+    assert "created" in DelegatedExecution.runner_session_statuses()
+  end
+
+  test "heartbeat returns not_found for missing agent" do
+    assert {:error, :agent_not_found} = DelegatedExecution.heartbeat("nonexistent-agent")
+  end
+
+  test "heartbeat_runner returns not_found for missing runner" do
+    assert {:error, :runner_not_found} = DelegatedExecution.heartbeat_runner("nonexistent-runner")
+  end
+
+  test "get functions return nil for missing records" do
+    refute DelegatedExecution.get_assignment("nonexistent-asgn")
+    refute DelegatedExecution.get_runner("nonexistent-runner")
+    refute DelegatedExecution.get_runner_session("nonexistent-rsess")
+  end
+
+  test "execute_assignment requires confirmation" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-confirm", "apr-confirm", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_agent!("agent-confirm", "ws-confirm", now)
+
+    assert {:ok, _claimed} =
+             DelegatedExecution.claim_assignment(assignment.assignment_id, "agent-confirm", now: now)
+
+    assert {:error, :confirmation_required} =
+             DelegatedExecution.execute_assignment(
+               assignment.assignment_id,
+               "agent-confirm",
+               now: now
+             )
+  end
+
+  test "execute_runner_session requires confirmation" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-rs-confirm", "apr-rs-confirm", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-rs-confirm", "agent-rs-confirm", "ws-rs-confirm", now)
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-rs-confirm",
+               session_id: "rsess-confirm",
+               now: now
+             )
+
+    assert {:error, :confirmation_required} =
+             DelegatedExecution.execute_runner_session(
+               session.session_id,
+               "runner-rs-confirm",
+               now: now
+             )
+  end
+
+  test "fail_assignment closes claimed work safely" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-fail", "apr-fail", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_agent!("agent-fail", "ws-fail", now)
+
+    assert {:ok, _claimed} =
+             DelegatedExecution.claim_assignment(assignment.assignment_id, "agent-fail", now: now)
+
+    assert {:ok, failed} =
+             DelegatedExecution.fail_assignment(
+               assignment.assignment_id,
+               "agent-fail",
+               "manual failure",
+               now: now
+             )
+
+    assert failed.status == "failed"
+    assert failed.summary == "manual failure"
+    assert failed.active_claim_key == nil
+    assert failed.completed_at != nil
+
+    assert [
+             "assignment.created",
+             "assignment.claimed",
+             "assignment.failed"
+           ] =
+             assignment.assignment_id
+             |> reports_for_assignment()
+             |> Enum.map(& &1.kind)
+  end
+
+  test "fail_runner_session closes runner session and assignment" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-rs-fail", "apr-rs-fail", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-rs-fail", "agent-rs-fail", "ws-rs-fail", now)
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-rs-fail",
+               session_id: "rsess-fail",
+               now: now
+             )
+
+    assert {:ok, failed} =
+             DelegatedExecution.fail_runner_session(
+               session.session_id,
+               "runner-rs-fail",
+               "runner failure",
+               now: now
+             )
+
+    assert failed.status == "failed"
+    assert failed.active_assignment_key == nil
+
+    assert Repo.get_by!(Assignment, assignment_id: assignment.assignment_id).status == "failed"
+
+    assert [
+             "runner_session.created",
+             "runner_session.claimed",
+             "runner_session.failed"
+           ] =
+             session.session_id
+             |> runner_reports_for_session()
+             |> Enum.map(& &1.kind)
+  end
+
+  test "create_assignment errors for missing or invalid actions" do
+    now = DateTime.utc_now()
+
+    assert {:error, {:action_not_found, "nonexistent"}} =
+             DelegatedExecution.create_assignment("nonexistent", now: now)
+
+    action = planned_action!("ws-bad-source", "apr-bad-source", "test")
+
+    Repo.get_by!(OrchestrationAction, action_id: action.action_id)
+    |> OrchestrationAction.changeset(%{source: "other"})
+    |> Repo.update!()
+
+    assert {:error, {:unsupported_safe_action_source, "other"}} =
+             DelegatedExecution.create_assignment(action.action_id, now: now)
+
+    action2 = planned_action!("ws-bad-status", "apr-bad-status", "test")
+
+    Repo.get_by!(OrchestrationAction, action_id: action2.action_id)
+    |> OrchestrationAction.changeset(%{status: "executed"})
+    |> Repo.update!()
+
+    assert {:error, {:action_not_assignable, "executed"}} =
+             DelegatedExecution.create_assignment(action2.action_id, now: now)
+  end
+
+  test "claim_assignment errors for missing or closed assignments" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-claim-err", "apr-claim-err", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_agent!("agent-claim-err", "ws-claim-err", now)
+
+    assert {:error, :assignment_or_agent_not_found} =
+             DelegatedExecution.claim_assignment("nonexistent", "agent-claim-err", now: now)
+
+    assert {:error, :assignment_or_agent_not_found} =
+             DelegatedExecution.claim_assignment(
+               assignment.assignment_id,
+               "nonexistent",
+               now: now
+             )
+
+    assert {:ok, _claimed} =
+             DelegatedExecution.claim_assignment(
+               assignment.assignment_id,
+               "agent-claim-err",
+               now: now
+             )
+
+    assert {:ok, _failed} =
+             DelegatedExecution.fail_assignment(
+               assignment.assignment_id,
+               "agent-claim-err",
+               "closed",
+               now: now
+             )
+
+    assert {:error, {:assignment_closed, "failed"}} =
+             DelegatedExecution.claim_assignment(
+               assignment.assignment_id,
+               "agent-claim-err",
+               now: now
+             )
+  end
+
+  test "execute_assignment errors for wrong claimant or non-executable status" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-exec-err", "apr-exec-err", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_agent!("agent-exec-err", "ws-exec-err", now)
+    register_capable_agent!("agent-exec-other", "ws-exec-err", now)
+
+    assert {:ok, _claimed} =
+             DelegatedExecution.claim_assignment(
+               assignment.assignment_id,
+               "agent-exec-err",
+               now: now
+             )
+
+    assert {:error, {:assignment_claimed_by, "agent-exec-err"}} =
+             DelegatedExecution.execute_assignment(
+               assignment.assignment_id,
+               "agent-exec-other",
+               confirm: true,
+               now: now
+             )
+
+    assert {:ok, _completed} =
+             DelegatedExecution.fail_assignment(
+               assignment.assignment_id,
+               "agent-exec-err",
+               "done",
+               now: now
+             )
+
+    assert {:error, {:assignment_not_executable, "failed"}} =
+             DelegatedExecution.execute_assignment(
+               assignment.assignment_id,
+               "agent-exec-err",
+               confirm: true,
+               now: now
+             )
+  end
+
+  test "runner_session logs and attach return not_found for missing session" do
+    assert {:error, :runner_session_not_found} =
+             DelegatedExecution.runner_session_logs("nonexistent")
+
+    assert {:error, :runner_session_not_found} =
+             DelegatedExecution.runner_session_attach_plan("nonexistent")
+  end
+
+  test "runner_session_attach_plan builds shell-quoted command" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-attach", "apr-attach", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-attach", "agent-attach", "ws-attach", now)
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-attach",
+               session_id: "rsess-attach",
+               tmux_session_name: "session-with spaces'and'quotes",
+               now: now
+             )
+
+    assert {:ok, plan} =
+             DelegatedExecution.runner_session_attach_plan(session.session_id)
+
+    assert plan.command =~ "tmux"
+    assert plan.note =~ "jx did not execute tmux"
+    assert plan.session.session_id == session.session_id
+  end
+
+  test "runner session lifecycle transitions enforce ownership and state" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-lifecycle", "apr-lifecycle", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-lifecycle", "agent-lifecycle", "ws-lifecycle", now)
+    register_capable_runner!("runner-lifecycle-b", "agent-lifecycle-b", "ws-lifecycle", now)
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-lifecycle",
+               session_id: "rsess-lifecycle",
+               now: now
+             )
+
+    assert {:error, {:runner_session_owned_by, "runner-lifecycle"}} =
+             DelegatedExecution.start_runner_session(
+               session.session_id,
+               "runner-lifecycle-b",
+               now: now
+             )
+
+    assert {:ok, failed_session} =
+             DelegatedExecution.execute_runner_session(
+               session.session_id,
+               "runner-lifecycle",
+               confirm: true,
+               now: now
+             )
+
+    assert failed_session.status == "failed"
+  end
+
+  test "list functions filter by status and return empty for no matches" do
+    now = DateTime.utc_now()
+    assert DelegatedExecution.list_agents(status: "all", now: now) == []
+    assert DelegatedExecution.list_runners(status: "all", now: now) == []
+    assert DelegatedExecution.list_assignments(status: "all", now: now) == []
+    assert DelegatedExecution.list_runner_sessions(status: "all", now: now) == []
+  end
+
+  test "reports_for_assignment returns empty list for unknown assignment" do
+    assert DelegatedExecution.reports_for_assignment("nonexistent") == []
+  end
+
+  test "enqueue_devide_runner_assignment errors for missing or invalid inputs" do
+    now = DateTime.utc_now()
+
+    assert {:error, :assignment_not_found} =
+             DelegatedExecution.enqueue_devide_runner_assignment("nonexistent", now: now)
+
+    bypass = Bypass.open()
+    client = Client.new(base_url: "http://localhost:#{bypass.port}", api_token: @token)
+
+    Bypass.expect_once(bypass, "POST", "/api/workspaces/ws-enq/runs", fn conn ->
+      Plug.Conn.resp(conn, 500, "unexpected")
+    end)
+
+    action = planned_action!("ws-enq", "apr-enq", "test")
+
+    assert {:ok, assignment} =
+             DelegatedExecution.create_assignment(action.action_id, now: now)
+
+    assert {:error, %JX.DevIDE.Client.Error{}} =
+             DelegatedExecution.enqueue_devide_runner_assignment(
+               assignment.assignment_id,
+               now: now,
+               client: client
+             )
+
+    insert_approval!("apr-enq2", workspace_id: "ws-enq2", command_id: "test")
+
+    %OrchestrationAction{}
+    |> OrchestrationAction.changeset(%{
+      action_id: "act-non-devide",
+      ref: "apr-enq2",
+      source: "approval",
+      action: "some_other_action",
+      target: "ws-enq2",
+      status: "planned",
+      requested: "operator",
+      queue_key: "ws-enq2:some_other_action",
+      payload:
+        Jason.encode!(%{
+          "correlation_id" => "corr-test",
+          "command_id" => "test",
+          "workspace_id" => "ws-enq2"
+        })
+    })
+    |> Repo.insert!()
+
+    assert {:ok, assignment2} =
+             DelegatedExecution.create_assignment("act-non-devide", now: now)
+
+    assert {:error, {:unsupported_devide_runner_safe_action, "some_other_action"}} =
+             DelegatedExecution.enqueue_devide_runner_assignment(
+               assignment2.assignment_id,
+               now: now
+             )
+  end
+
+  test "reconcile_devide_runner_replay rejects non-map replay" do
+    assert {:error, :invalid_replay} =
+             DelegatedExecution.reconcile_devide_runner_replay("not-a-map")
+
+    assert {:error, :invalid_replay} =
+             DelegatedExecution.reconcile_devide_runner_replay(nil)
+  end
+
+  test "heartbeat updates agent capabilities and metadata" do
+    now = DateTime.utc_now()
+
+    assert {:ok, agent} =
+             DelegatedExecution.register_agent(%{
+               agent_id: "agent-heartbeat",
+               capabilities: ["cap1"],
+               metadata: %{"key" => "val"},
+               now: now
+             })
+
+    assert agent.capabilities == Jason.encode!(["cap1"])
+
+    later = DateTime.add(now, 1, :second)
+
+    assert {:ok, updated} =
+             DelegatedExecution.heartbeat("agent-heartbeat",
+               now: later,
+               capabilities: ["cap1", "cap2"],
+               metadata: %{"key" => "updated"}
+             )
+
+    assert Jason.decode!(updated.capabilities) == ["cap1", "cap2"]
+    assert Jason.decode!(updated.metadata) == %{"key" => "updated"}
+    assert updated.status == "idle"
+  end
+
+  test "heartbeat_runner updates runner and agent state" do
+    now = DateTime.utc_now()
+
+    assert {:ok, _runner} =
+             DelegatedExecution.register_runner(%{
+               runner_id: "runner-heartbeat",
+               capabilities: ["cap1"],
+               metadata: %{"key" => "val"},
+               now: now
+             })
+
+    later = DateTime.add(now, 1, :second)
+
+    assert {:ok, updated} =
+             DelegatedExecution.heartbeat_runner("runner-heartbeat",
+               now: later,
+               capabilities: ["cap1", "cap2"],
+               metadata: %{"key" => "updated"}
+             )
+
+    assert Jason.decode!(updated.capabilities) == ["cap1", "cap2"]
+    assert updated.status == "idle"
+
+    assert Repo.get_by(Agent, agent_id: "runner-heartbeat:agent")
+  end
+
+  test "runner capability routing checks os, repo, branch_isolation, runtime, and tools" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-route-checks", "apr-route-checks", "test")
+
+    assert {:ok, assignment} =
+             DelegatedExecution.create_assignment(action.action_id,
+               now: now,
+               runner_requirements: %{
+                 os: "linux",
+                 repo: "my-repo",
+                 branch_isolation: "worktree",
+                 runtime_id: "rt-1",
+                 runtime_path: "/path",
+                 tools: ["git", "mix"]
+               }
+             )
+
+    register_capable_runner!("runner-bad-os", "agent-bad-os", "ws-route-checks", now,
+      metadata: %{
+        os: "darwin",
+        repo: "my-repo",
+        branch_isolation: "worktree",
+        runtime_id: "rt-1",
+        runtime_path: "/path",
+        tools: ["git", "mix"]
+      }
+    )
+
+    assert {:error, {:runner_os_mismatch, "linux"}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-bad-os",
+               now: now
+             )
+
+    register_capable_runner!("runner-bad-repo", "agent-bad-repo", "ws-route-checks", now,
+      metadata: %{
+        os: "linux",
+        repo: "other-repo",
+        branch_isolation: "worktree",
+        runtime_id: "rt-1",
+        runtime_path: "/path",
+        tools: ["git", "mix"]
+      }
+    )
+
+    assert {:error, {:runner_repo_mismatch, "my-repo"}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-bad-repo",
+               now: now
+             )
+
+    register_capable_runner!("runner-bad-branch", "agent-bad-branch", "ws-route-checks", now,
+      metadata: %{
+        os: "linux",
+        repo: "my-repo",
+        branch_isolation: "other",
+        runtime_id: "rt-1",
+        runtime_path: "/path",
+        tools: ["git", "mix"]
+      }
+    )
+
+    assert {:error, {:runner_branch_isolation_mismatch, "worktree"}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-bad-branch",
+               now: now
+             )
+
+    register_capable_runner!("runner-bad-runtime", "agent-bad-runtime", "ws-route-checks", now,
+      metadata: %{
+        os: "linux",
+        repo: "my-repo",
+        branch_isolation: "worktree",
+        runtime_id: "rt-2",
+        runtime_path: "/path",
+        tools: ["git", "mix"]
+      }
+    )
+
+    assert {:error, {:runner_runtime_mismatch, "rt-1"}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-bad-runtime",
+               now: now
+             )
+
+    register_capable_runner!("runner-bad-path", "agent-bad-path", "ws-route-checks", now,
+      metadata: %{
+        os: "linux",
+        repo: "my-repo",
+        branch_isolation: "worktree",
+        runtime_id: "rt-1",
+        runtime_path: "/other",
+        tools: ["git", "mix"]
+      }
+    )
+
+    assert {:error, {:runner_runtime_path_mismatch, "/path"}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-bad-path",
+               now: now
+             )
+
+    register_capable_runner!("runner-bad-tools", "agent-bad-tools", "ws-route-checks", now,
+      metadata: %{
+        os: "linux",
+        repo: "my-repo",
+        branch_isolation: "worktree",
+        runtime_id: "rt-1",
+        runtime_path: "/path",
+        tools: ["git"]
+      }
+    )
+
+    assert {:error, {:runner_missing_tools, ["mix"]}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-bad-tools",
+               now: now
+             )
+  end
+
+  test "runner session lists filter by runner, workspace, and assignment" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-filter", "apr-filter", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-filter", "agent-filter", "ws-filter", now)
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-filter",
+               session_id: "rsess-filter",
+               now: now
+             )
+
+    assert [summary] = DelegatedExecution.list_runner_sessions(runner_id: "runner-filter", now: now)
+    assert summary.session_id == session.session_id
+
+    assert [summary2] =
+             DelegatedExecution.list_runner_sessions(workspace_id: "ws-filter", now: now)
+
+    assert summary2.session_id == session.session_id
+
+    assert [summary3] =
+             DelegatedExecution.list_runner_sessions(
+               assignment_id: assignment.assignment_id,
+               now: now
+             )
+
+    assert summary3.session_id == session.session_id
+
+    assert [] =
+             DelegatedExecution.list_runner_sessions(runner_id: "nonexistent", now: now)
+  end
+
+  test "runner expiration clears active sessions and assignments" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-runner-exp", "apr-runner-exp", "test")
+
+    assert {:ok, assignment} =
+             DelegatedExecution.create_assignment(action.action_id, now: now, ttl_seconds: 60)
+
+    register_capable_runner!("runner-exp", "agent-runner-exp", "ws-runner-exp", now,
+      ttl_seconds: 1
+    )
+
+    assert {:ok, %{session: _session, assignment: claimed}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-exp",
+               session_id: "rsess-exp",
+               now: now,
+               ttl_seconds: 60
+             )
+
+    later = DateTime.add(now, 2, :second)
+
+    assert [%{session_id: "rsess-exp", status: "expired"}] =
+             DelegatedExecution.expire_runner_sessions(now: later)
+
+    assert Repo.get_by!(Assignment, assignment_id: assignment.assignment_id).status == "expired"
+    assert Repo.get_by!(Lease, lease_id: claimed.lease_id).status == "released"
+  end
+
+  test "runner_status returns busy when active sessions exist" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-runner-busy", "apr-runner-busy", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-busy", "agent-busy", "ws-runner-busy", now)
+
+    assert {:ok, _} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-busy",
+               session_id: "rsess-busy",
+               now: now
+             )
+
+    assert [%{status: "busy"}] =
+             DelegatedExecution.list_runners(status: "all", now: now)
+             |> Enum.filter(&(&1.runner_id == "runner-busy"))
+  end
+
+  test "list_agents filters by status and respects limit" do
+    now = DateTime.utc_now()
+
+    for i <- 1..3 do
+      assert {:ok, _} =
+               DelegatedExecution.register_agent(%{
+                 agent_id: "agent-list-#{i}",
+                 now: now
+               })
+    end
+
+    assert length(DelegatedExecution.list_agents(limit: 2, now: now)) == 2
+
+    assert Enum.all?(
+             DelegatedExecution.list_agents(status: "idle", now: now),
+             &(&1.status == "idle")
+           )
+  end
+
+  test "list_assignments filters by status and agent" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-assign-list", "apr-assign-list", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_agent!("agent-assign-list", "ws-assign-list", now)
+
+    assert {:ok, _claimed} =
+             DelegatedExecution.claim_assignment(
+               assignment.assignment_id,
+               "agent-assign-list",
+               now: now
+             )
+
+    assert [summary] =
+             DelegatedExecution.list_assignments(
+               status: "claimed",
+               agent_id: "agent-assign-list",
+               now: now
+             )
+
+    assert summary.assignment_id == assignment.assignment_id
+
+    assert [] =
+             DelegatedExecution.list_assignments(
+               status: "completed",
+               now: now
+             )
+  end
+
+  test "runner_session heartbeat extends expiration" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-rs-hb", "apr-rs-hb", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+
+    register_capable_runner!("runner-rs-hb", "agent-rs-hb", "ws-rs-hb", now,
+      ttl_seconds: 10
+    )
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-rs-hb",
+               session_id: "rsess-hb-ext",
+               now: now,
+               ttl_seconds: 60
+             )
+
+    later = DateTime.add(now, 5, :second)
+
+    assert {:ok, updated} =
+             DelegatedExecution.heartbeat_runner_session(
+               session.session_id,
+               "runner-rs-hb",
+               now: later
+             )
+
+    assert updated.heartbeat_at == later
+    assert DateTime.compare(updated.expires_at, later) == :gt
+  end
+
+  test "claim_runner_assignment errors for stale runner" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-stale-claim", "apr-stale-claim", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+
+    old = DateTime.add(now, -30, :second)
+
+    register_capable_runner!("runner-stale-claim", "agent-stale-claim", "ws-stale-claim", old,
+      ttl_seconds: 10
+    )
+
+    assert {:error, {:runner_stale, "runner-stale-claim"}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-stale-claim",
+               now: now
+             )
+  end
+
+  test "reconcile_devide_runner_assignments returns empty when no targets" do
+    assert [] = DelegatedExecution.reconcile_devide_runner_assignments()
+  end
+
+  test "assignment reports accumulate across lifecycle events" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-reports", "apr-reports", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_agent!("agent-reports", "ws-reports", now)
+
+    assert {:ok, _} =
+             DelegatedExecution.claim_assignment(
+               assignment.assignment_id,
+               "agent-reports",
+               now: now
+             )
+
+    assert length(DelegatedExecution.reports_for_assignment(assignment.assignment_id)) == 2
+
+    assert {:ok, _} =
+             DelegatedExecution.start_assignment(
+               assignment.assignment_id,
+               "agent-reports",
+               now: DateTime.add(now, 1, :second)
+             )
+
+    assert length(DelegatedExecution.reports_for_assignment(assignment.assignment_id)) == 3
+  end
+
+  test "runner session progress updates summary and status" do
+    now = DateTime.utc_now()
+    action = planned_action!("ws-rs-prog", "apr-rs-prog", "test")
+    assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
+    register_capable_runner!("runner-rs-prog", "agent-rs-prog", "ws-rs-prog", now)
+
+    assert {:ok, %{session: session}} =
+             DelegatedExecution.claim_runner_assignment(
+               assignment.assignment_id,
+               "runner-rs-prog",
+               session_id: "rsess-prog",
+               now: now
+             )
+
+    assert {:ok, started} =
+             DelegatedExecution.start_runner_session(
+               session.session_id,
+               "runner-rs-prog",
+               now: DateTime.add(now, 1, :second)
+             )
+
+    assert started.status == "running"
+
+    assert {:ok, progressed} =
+             DelegatedExecution.progress_runner_session(
+               session.session_id,
+               "runner-rs-prog",
+               "making progress",
+               now: DateTime.add(now, 2, :second)
+             )
+
+    assert progressed.status == "progressed"
+    assert progressed.last_summary == "making progress"
+  end
+
   defp cleanup_state do
     Repo.delete_all(RunnerReport)
     Repo.delete_all(Resource)

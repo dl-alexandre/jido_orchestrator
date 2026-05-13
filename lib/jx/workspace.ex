@@ -1249,6 +1249,60 @@ defmodule JX.Workspace do
     {:ok, %{generated_at: DateTime.utc_now(), reports: reports}}
   end
 
+  def capacity_host(host_name, opts \\ []) do
+    with %{} = host <- Hosts.get_host_by_name(host_name) do
+      JX.HostCapacity.assess(host, opts)
+    else
+      nil -> {:error, :host_not_found}
+    end
+  end
+
+  def capacity_hosts(opts \\ []) do
+    results =
+      Hosts.list_hosts()
+      |> Enum.map(fn host ->
+        case JX.HostCapacity.assess(host, opts) do
+          {:ok, result} -> result
+          {:error, reason} -> %{host: host.name, error: inspect(reason)}
+        end
+      end)
+
+    {:ok, %{generated_at: DateTime.utc_now(), results: results}}
+  end
+
+  def set_capacity_limit(host_name, limit) do
+    Hosts.set_capacity_limit(host_name, limit)
+  end
+
+  def snapshot_capacity(host_name, active_sessions) do
+    case Hosts.get_host_by_name(host_name) do
+      nil -> {:error, :host_not_found}
+      host -> JX.HostCapacity.Observer.snapshot(host, active_sessions)
+    end
+  end
+
+  def evaluate_capacity(host_name, opts \\ []) do
+    case Hosts.get_host_by_name(host_name) do
+      nil ->
+        {:error, :host_not_found}
+
+      host ->
+        eval_opts = Keyword.put_new(opts, :current_limit, host.capacity_limit)
+        {:ok, JX.HostCapacity.Evaluator.evaluate(host_name, eval_opts)}
+    end
+  end
+
+  def evaluate_all_capacity(opts \\ []) do
+    results =
+      Hosts.list_hosts()
+      |> Enum.map(fn host ->
+        eval_opts = Keyword.put_new(opts, :current_limit, host.capacity_limit)
+        JX.HostCapacity.Evaluator.evaluate(host.name, eval_opts)
+      end)
+
+    {:ok, %{generated_at: DateTime.utc_now(), results: results}}
+  end
+
   def assign_task(project_name, prompt, opts \\ []) do
     agent_name = Keyword.get(opts, :agent_name, "claude") |> IDs.slug()
     agent_transport = normalize_agent_transport(Keyword.get(opts, :agent_transport))
