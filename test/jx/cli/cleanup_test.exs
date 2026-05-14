@@ -118,7 +118,9 @@ defmodule JX.CLI.CleanupTest do
   end
 
   test "usage_lines returns usage string" do
-    assert Cleanup.usage_lines() == ["jx cleanup --dry-run|audit [--owner-project <name>] [--type tmux_session|temp_path|worktree_path|task_dir|log_path] [--json]"]
+    assert Cleanup.usage_lines() == [
+             "jx cleanup --dry-run|audit [--owner-project <name>] [--type tmux_session|temp_path|worktree_path|task_dir|log_path] [--json]"
+           ]
   end
 
   test "dry-run prints attributable resources and exact cleanup command" do

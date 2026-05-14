@@ -931,9 +931,11 @@ defmodule JX.CLITest do
   end
 
   test "process ls returns ok" do
-    output = capture_io(fn ->
-      assert :ok = CLI.run(["process", "ls"])
-    end)
+    output =
+      capture_io(fn ->
+        assert :ok = CLI.run(["process", "ls"])
+      end)
+
     # When processes exist, a table is printed; otherwise "no processes".
     # We only assert that the dispatch clause was exercised.
     assert is_binary(output)

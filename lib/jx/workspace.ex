@@ -1315,7 +1315,8 @@ defmodule JX.Workspace do
     if profile_name in Projects.Project.profile_names() do
       Projects.set_capacity_profile(project_name, host_name, profile_name)
     else
-      {:error, "unknown profile #{inspect(profile_name)}; valid: #{Enum.join(Projects.Project.profile_names(), ", ")}"}
+      {:error,
+       "unknown profile #{inspect(profile_name)}; valid: #{Enum.join(Projects.Project.profile_names(), ", ")}"}
     end
   end
 

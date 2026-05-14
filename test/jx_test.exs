@@ -107,7 +107,9 @@ defmodule JXTest do
       assert JX.delegation_brief("nonexistent") == {:error, :delegation_not_found}
       assert JX.delegation_preflight("nonexistent") == {:error, :delegation_not_found}
       assert JX.delegation_review("nonexistent") == {:error, :delegation_not_found}
-      assert JX.decide_delegation_review("nonexistent", "accept") == {:error, :delegation_not_found}
+
+      assert JX.decide_delegation_review("nonexistent", "accept") ==
+               {:error, :delegation_not_found}
     end
 
     test "delegation list and summary functions return expected shapes" do
@@ -147,22 +149,40 @@ defmodule JXTest do
     test "google meet session functions return not_found for nonexistent sessions" do
       assert JX.google_meet_session("nonexistent") == {:error, :google_meet_session_not_found}
       assert JX.google_meet_join_plan("nonexistent") == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_join_session("nonexistent") == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_realtime_plan("nonexistent") == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_start_realtime("nonexistent") == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_realtime_consult("nonexistent", %{}) == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_realtime_watch("nonexistent") == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_sync_artifacts("nonexistent") == {:error, :google_meet_session_not_found}
-      assert JX.google_meet_export_session("nonexistent") == {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_join_session("nonexistent") ==
+               {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_realtime_plan("nonexistent") ==
+               {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_start_realtime("nonexistent") ==
+               {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_realtime_consult("nonexistent", %{}) ==
+               {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_realtime_watch("nonexistent") ==
+               {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_sync_artifacts("nonexistent") ==
+               {:error, :google_meet_session_not_found}
+
+      assert JX.google_meet_export_session("nonexistent") ==
+               {:error, :google_meet_session_not_found}
     end
 
     test "google meet auth functions return not_found for nonexistent profiles" do
-      assert JX.google_meet_auth_url("nonexistent") == {:error, :google_meet_auth_profile_not_found}
-      assert JX.google_meet_exchange_auth_code("nonexistent", "code") == {:error, :google_meet_auth_profile_not_found}
+      assert JX.google_meet_auth_url("nonexistent") ==
+               {:error, :google_meet_auth_profile_not_found}
+
+      assert JX.google_meet_exchange_auth_code("nonexistent", "code") ==
+               {:error, :google_meet_auth_profile_not_found}
     end
 
     test "google_meet_create_session/1 returns error for empty attrs" do
-      assert JX.google_meet_create_session(%{}) == {:error, "Google Meet session requires --meeting <url-or-code>"}
+      assert JX.google_meet_create_session(%{}) ==
+               {:error, "Google Meet session requires --meeting <url-or-code>"}
     end
   end
 

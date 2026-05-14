@@ -84,7 +84,12 @@ defmodule JX.CLI.Project do
         |> Map.values()
         |> Enum.sort_by(& &1.name)
         |> Enum.map(fn p ->
-          [p.name, "#{p.ram_mb_per_slot} MB", "#{p.disk_mb_per_slot} MB", "#{p.cpu_cores_per_slot} cores"]
+          [
+            p.name,
+            "#{p.ram_mb_per_slot} MB",
+            "#{p.disk_mb_per_slot} MB",
+            "#{p.cpu_cores_per_slot} cores"
+          ]
         end)
 
       print_table(["PROFILE", "RAM/SLOT", "DISK/SLOT", "CPU/SLOT"], rows)

@@ -1141,7 +1141,7 @@ defmodule JX.FanoutTest do
                state: "local_validated",
                reported_at: "2026-05-08T12:05:00Z",
                data: %{"validation" => "passed"}
-              })
+             })
   end
 
   test "to_map(%RunManifest{}) returns the expected map" do
@@ -1380,4 +1380,3 @@ defmodule JX.FanoutTest do
     |> Enum.join("\n")
   end
 end
-

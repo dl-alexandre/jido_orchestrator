@@ -29,7 +29,8 @@ defmodule JX.CLI.Host do
       @host_capacity_history_usage
     ]
 
-  def usage_lines(:hosts), do: [@hosts_doctor_usage, @hosts_capacity_usage, @hosts_capacity_eval_usage]
+  def usage_lines(:hosts),
+    do: [@hosts_doctor_usage, @hosts_capacity_usage, @hosts_capacity_eval_usage]
 
   def run(["add", name | args], opts) do
     {parsed, rest, invalid} =
@@ -127,6 +128,7 @@ defmodule JX.CLI.Host do
       else
         print_capacity_history(name, history)
       end
+
       :ok
     end
   end
@@ -170,7 +172,9 @@ defmodule JX.CLI.Host do
 
   def run_plural(["capacity" | args], opts) do
     {parsed, rest, invalid} =
-      OptionParser.parse(args, strict: [ram: :integer, disk: :integer, cpu: :float, json: :boolean])
+      OptionParser.parse(args,
+        strict: [ram: :integer, disk: :integer, cpu: :float, json: :boolean]
+      )
 
     with :ok <- validate_options(invalid),
          :ok <- expect_no_args(rest, @hosts_capacity_usage),
@@ -350,7 +354,13 @@ defmodule JX.CLI.Host do
     IO.puts("host #{r.host}: error - #{reason}")
   end
 
-  defp print_capacity_result(%{host: name, resources: res, limits: lim, recommended_worktrees: rec, profile: prof}) do
+  defp print_capacity_result(%{
+         host: name,
+         resources: res,
+         limits: lim,
+         recommended_worktrees: rec,
+         profile: prof
+       }) do
     IO.puts("host #{name}")
     IO.puts("")
     IO.puts("  resources")
@@ -359,7 +369,11 @@ defmodule JX.CLI.Host do
     IO.puts("    CPU   #{res.cpu_cores} logical cores")
     IO.puts("")
     IO.puts("  profile: #{prof.name}")
-    IO.puts("    #{prof.ram_mb_per_slot} MB RAM / #{prof.disk_mb_per_slot} MB disk / #{prof.cpu_cores_per_slot} CPU cores per slot")
+
+    IO.puts(
+      "    #{prof.ram_mb_per_slot} MB RAM / #{prof.disk_mb_per_slot} MB disk / #{prof.cpu_cores_per_slot} CPU cores per slot"
+    )
+
     IO.puts("")
     IO.puts("  capacity")
     IO.puts("    by RAM   #{lim.by_ram} worktree(s)")
@@ -389,7 +403,11 @@ defmodule JX.CLI.Host do
 
   defp print_eval_result(r) do
     limit_display = if r.current_limit, do: "#{r.current_limit}", else: "formula-derived"
-    suggested = if r.suggested_limit, do: "  suggested limit: #{r.suggested_limit}", else: "  suggested limit: no change"
+
+    suggested =
+      if r.suggested_limit,
+        do: "  suggested limit: #{r.suggested_limit}",
+        else: "  suggested limit: no change"
 
     IO.puts("host #{r.host}")
     IO.puts("")
@@ -439,7 +457,10 @@ defmodule JX.CLI.Host do
         ]
       end)
 
-    print_table(["TIME", "SESSIONS", "RAM avail/total (MB)", "DISK avail/total (MB)", "LOAD"], rows)
+    print_table(
+      ["TIME", "SESSIONS", "RAM avail/total (MB)", "DISK avail/total (MB)", "LOAD"],
+      rows
+    )
   end
 
   defp maybe_apply_suggestion(%{verdict: verdict, suggested_limit: limit}, host_name, opts)

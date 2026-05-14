@@ -78,7 +78,7 @@ defmodule JX.CLI.SessionTest do
     def session_profiles(opts) do
       send(self(), {:session_profiles, opts})
 
-          case opts[:ref] do
+      case opts[:ref] do
         "empty-profile" ->
           {:ok,
            %{
@@ -129,75 +129,75 @@ defmodule JX.CLI.SessionTest do
            %{
              generated_at: "2026-05-12T00:00:00Z",
              observed: opts[:observe],
-               observation_refresh: %{
-                 saved: 5,
-                 bool_val: true,
-                 text_val: "hello",
-                 nested: %{
-                   inner_a: 1,
-                   inner_b: false,
-                   inner_c: "text",
-                   inner_d: nil,
-                   inner_e: DateTime.utc_now(),
-                   inner_f: :atom
-                 },
-                 struct_val: DateTime.utc_now(),
-                 unknown: :atom
+             observation_refresh: %{
+               saved: 5,
+               bool_val: true,
+               text_val: "hello",
+               nested: %{
+                 inner_a: 1,
+                 inner_b: false,
+                 inner_c: "text",
+                 inner_d: nil,
+                 inner_e: DateTime.utc_now(),
+                 inner_f: :atom
                },
-              operator: %{
-                key: "default",
-                source: "built-in",
-                name: "Op",
-                preferences: "pref",
-                working_style: "style",
-                escalation_policy: "policy",
-                notes: "notes",
-                updated_at: "2026-05-12T00:00:00Z"
-              },
-              total: 1,
-              profiles: [
-                %{
-                  ref: opts[:ref],
-                  comparison: %{state: "aligned", actual_summary: String.duplicate("a", 100)},
-                  coordination: %{mode: "single", operator_needed: true},
-                  planned: %{
-                    prompt_status: "ready",
-                    expected_completion: String.duplicate("b", 40),
-                    objective: String.duplicate("c", 60)
-                  },
-                  session: %{control_mode: "managed"},
-                  actual: %{work_state: "idle"},
-                  next_step: String.duplicate("d", 50)
-                },
-                %{
-                  ref: opts[:ref],
-                  comparison: %{state: "aligned", actual_summary: "idle"},
-                  coordination: %{mode: "single", operator_needed: false},
-                  planned: %{
-                    prompt_status: "ready",
-                    expected_completion: "done",
-                    objective: "cover session CLI"
-                  },
-                  session: %{control_mode: "managed"},
-                  actual: %{work_state: "idle"},
-                  next_step: "continue"
-                },
-                %{
-                  ref: opts[:ref],
-                  comparison: %{state: "aligned", actual_summary: "idle"},
-                  coordination: %{mode: "single"},
-                  planned: %{
-                    prompt_status: "ready",
-                    expected_completion: "done",
-                    objective: "cover session CLI"
-                  },
-                  session: %{control_mode: "managed"},
-                  actual: %{work_state: "idle"},
-                  next_step: "continue"
-                }
-              ],
-              errors: []
-            }}
+               struct_val: DateTime.utc_now(),
+               unknown: :atom
+             },
+             operator: %{
+               key: "default",
+               source: "built-in",
+               name: "Op",
+               preferences: "pref",
+               working_style: "style",
+               escalation_policy: "policy",
+               notes: "notes",
+               updated_at: "2026-05-12T00:00:00Z"
+             },
+             total: 1,
+             profiles: [
+               %{
+                 ref: opts[:ref],
+                 comparison: %{state: "aligned", actual_summary: String.duplicate("a", 100)},
+                 coordination: %{mode: "single", operator_needed: true},
+                 planned: %{
+                   prompt_status: "ready",
+                   expected_completion: String.duplicate("b", 40),
+                   objective: String.duplicate("c", 60)
+                 },
+                 session: %{control_mode: "managed"},
+                 actual: %{work_state: "idle"},
+                 next_step: String.duplicate("d", 50)
+               },
+               %{
+                 ref: opts[:ref],
+                 comparison: %{state: "aligned", actual_summary: "idle"},
+                 coordination: %{mode: "single", operator_needed: false},
+                 planned: %{
+                   prompt_status: "ready",
+                   expected_completion: "done",
+                   objective: "cover session CLI"
+                 },
+                 session: %{control_mode: "managed"},
+                 actual: %{work_state: "idle"},
+                 next_step: "continue"
+               },
+               %{
+                 ref: opts[:ref],
+                 comparison: %{state: "aligned", actual_summary: "idle"},
+                 coordination: %{mode: "single"},
+                 planned: %{
+                   prompt_status: "ready",
+                   expected_completion: "done",
+                   objective: "cover session CLI"
+                 },
+                 session: %{control_mode: "managed"},
+                 actual: %{work_state: "idle"},
+                 next_step: "continue"
+               }
+             ],
+             errors: []
+           }}
 
         "mixed-profile" ->
           {:ok,

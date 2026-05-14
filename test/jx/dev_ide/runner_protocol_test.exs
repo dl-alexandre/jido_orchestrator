@@ -53,7 +53,9 @@ defmodule JX.DevIDE.RunnerProtocolTest do
   end
 
   test "report_failure_class/1 extracts failure class from report evidence" do
-    assert RunnerProtocol.report_failure_class(%{"evidence" => %{"failure_class" => "lease_expired"}}) ==
+    assert RunnerProtocol.report_failure_class(%{
+             "evidence" => %{"failure_class" => "lease_expired"}
+           }) ==
              "lease_expired"
 
     assert RunnerProtocol.report_failure_class(%{evidence: %{"failure_class" => "runner_lost"}}) ==
@@ -148,7 +150,10 @@ defmodule JX.DevIDE.RunnerProtocolTest do
       }
     }
 
-    assert RunnerProtocol.validate_replay(replay, %{"workspace_id" => "ws2", "assignment_id" => "a1"}) ==
+    assert RunnerProtocol.validate_replay(replay, %{
+             "workspace_id" => "ws2",
+             "assignment_id" => "a1"
+           }) ==
              {:error, {:replay_mismatch, :workspace_id}}
   end
 
@@ -163,7 +168,10 @@ defmodule JX.DevIDE.RunnerProtocolTest do
       }
     }
 
-    assert RunnerProtocol.validate_replay(replay, %{"workspace_id" => "ws1", "assignment_id" => "a1"}) ==
+    assert RunnerProtocol.validate_replay(replay, %{
+             "workspace_id" => "ws1",
+             "assignment_id" => "a1"
+           }) ==
              {:error, {:replay_mismatch, :jx_assignment_id}}
   end
 
@@ -218,7 +226,10 @@ defmodule JX.DevIDE.RunnerProtocolTest do
       }
     }
 
-    assert RunnerProtocol.validate_replay(replay, %{"workspace_id" => "ws1", "assignment_id" => "a1"}) ==
+    assert RunnerProtocol.validate_replay(replay, %{
+             "workspace_id" => "ws1",
+             "assignment_id" => "a1"
+           }) ==
              {:error, {:replay_mismatch, :status}}
   end
 
@@ -236,7 +247,10 @@ defmodule JX.DevIDE.RunnerProtocolTest do
       ]
     }
 
-    assert RunnerProtocol.validate_replay(replay, %{"workspace_id" => "ws1", "assignment_id" => "a1"}) ==
+    assert RunnerProtocol.validate_replay(replay, %{
+             "workspace_id" => "ws1",
+             "assignment_id" => "a1"
+           }) ==
              {:error, {:replay_mismatch, :reports}}
   end
 
@@ -252,7 +266,10 @@ defmodule JX.DevIDE.RunnerProtocolTest do
       "reports" => "not a list"
     }
 
-    assert RunnerProtocol.validate_replay(replay, %{"workspace_id" => "ws1", "assignment_id" => "a1"}) ==
+    assert RunnerProtocol.validate_replay(replay, %{
+             "workspace_id" => "ws1",
+             "assignment_id" => "a1"
+           }) ==
              {:error, {:replay_mismatch, :reports}}
   end
 
@@ -288,7 +305,10 @@ defmodule JX.DevIDE.RunnerProtocolTest do
       ]
     }
 
-    assert RunnerProtocol.validate_replay(replay, %{"workspace_id" => "ws1", "assignment_id" => "a1"}) ==
+    assert RunnerProtocol.validate_replay(replay, %{
+             "workspace_id" => "ws1",
+             "assignment_id" => "a1"
+           }) ==
              {:error, {:replay_mismatch, :reports}}
   end
 

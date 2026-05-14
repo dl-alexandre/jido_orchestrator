@@ -61,11 +61,36 @@ defmodule JX.CLI.ProjectTest do
     def list_capacity_profiles do
       {:ok,
        %{
-         "elixir-phoenix" => %{name: "elixir-phoenix", ram_mb_per_slot: 3072, disk_mb_per_slot: 2048, cpu_cores_per_slot: 0.4},
-         "rails"          => %{name: "rails",           ram_mb_per_slot: 2048, disk_mb_per_slot: 1536, cpu_cores_per_slot: 0.5},
-         "nodejs"         => %{name: "nodejs",           ram_mb_per_slot: 1024, disk_mb_per_slot: 1024, cpu_cores_per_slot: 0.3},
-         "go"             => %{name: "go",               ram_mb_per_slot: 768,  disk_mb_per_slot: 1024, cpu_cores_per_slot: 0.6},
-         "python-ml"      => %{name: "python-ml",        ram_mb_per_slot: 6144, disk_mb_per_slot: 4096, cpu_cores_per_slot: 0.5}
+         "elixir-phoenix" => %{
+           name: "elixir-phoenix",
+           ram_mb_per_slot: 3072,
+           disk_mb_per_slot: 2048,
+           cpu_cores_per_slot: 0.4
+         },
+         "rails" => %{
+           name: "rails",
+           ram_mb_per_slot: 2048,
+           disk_mb_per_slot: 1536,
+           cpu_cores_per_slot: 0.5
+         },
+         "nodejs" => %{
+           name: "nodejs",
+           ram_mb_per_slot: 1024,
+           disk_mb_per_slot: 1024,
+           cpu_cores_per_slot: 0.3
+         },
+         "go" => %{
+           name: "go",
+           ram_mb_per_slot: 768,
+           disk_mb_per_slot: 1024,
+           cpu_cores_per_slot: 0.6
+         },
+         "python-ml" => %{
+           name: "python-ml",
+           ram_mb_per_slot: 6144,
+           disk_mb_per_slot: 4096,
+           cpu_cores_per_slot: 0.5
+         }
        }}
     end
 
@@ -242,7 +267,14 @@ defmodule JX.CLI.ProjectTest do
       capture_io(fn ->
         assert :ok =
                  Project.run(
-                   ["capacity-profile", "saysure", "--host", "local", "--profile", "elixir-phoenix"],
+                   [
+                     "capacity-profile",
+                     "saysure",
+                     "--host",
+                     "local",
+                     "--profile",
+                     "elixir-phoenix"
+                   ],
                    start_app: start_app_callback(),
                    workspace: FakeWorkspace
                  )

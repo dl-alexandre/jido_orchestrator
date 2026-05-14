@@ -14,11 +14,31 @@ defmodule JX.Projects.Project do
   # Named capacity profiles shipped with jx.
   # Each describes the per-slot resource footprint of that project type.
   @profiles %{
-    "elixir-phoenix" => %{name: "elixir-phoenix", ram_mb_per_slot: 3_072, disk_mb_per_slot: 2_048, cpu_cores_per_slot: 0.4},
-    "rails"          => %{name: "rails",           ram_mb_per_slot: 2_048, disk_mb_per_slot: 1_536, cpu_cores_per_slot: 0.5},
-    "nodejs"         => %{name: "nodejs",           ram_mb_per_slot: 1_024, disk_mb_per_slot: 1_024, cpu_cores_per_slot: 0.3},
-    "go"             => %{name: "go",               ram_mb_per_slot: 768,   disk_mb_per_slot: 1_024, cpu_cores_per_slot: 0.6},
-    "python-ml"      => %{name: "python-ml",        ram_mb_per_slot: 6_144, disk_mb_per_slot: 4_096, cpu_cores_per_slot: 0.5}
+    "elixir-phoenix" => %{
+      name: "elixir-phoenix",
+      ram_mb_per_slot: 3_072,
+      disk_mb_per_slot: 2_048,
+      cpu_cores_per_slot: 0.4
+    },
+    "rails" => %{
+      name: "rails",
+      ram_mb_per_slot: 2_048,
+      disk_mb_per_slot: 1_536,
+      cpu_cores_per_slot: 0.5
+    },
+    "nodejs" => %{
+      name: "nodejs",
+      ram_mb_per_slot: 1_024,
+      disk_mb_per_slot: 1_024,
+      cpu_cores_per_slot: 0.3
+    },
+    "go" => %{name: "go", ram_mb_per_slot: 768, disk_mb_per_slot: 1_024, cpu_cores_per_slot: 0.6},
+    "python-ml" => %{
+      name: "python-ml",
+      ram_mb_per_slot: 6_144,
+      disk_mb_per_slot: 4_096,
+      cpu_cores_per_slot: 0.5
+    }
   }
 
   def profiles, do: @profiles

@@ -4377,7 +4377,8 @@ defmodule JX.WorkspaceTest do
   end
 
   test "wake rejects an empty message" do
-    assert {:error, "wake requires a non-empty message"} = Workspace.wake(%{message: "", summary: "  "})
+    assert {:error, "wake requires a non-empty message"} =
+             Workspace.wake(%{message: "", summary: "  "})
   end
 
   test "wake rejects an unsupported severity" do
@@ -4421,7 +4422,9 @@ defmodule JX.WorkspaceTest do
     assert length(filtered.sessions) == 1
     assert hd(filtered.sessions).ref == ref
 
-    {:ok, empty} = Workspace.snapshot_sessions(host_name: "build-1", type: "agent", ref: "nonexistent")
+    {:ok, empty} =
+      Workspace.snapshot_sessions(host_name: "build-1", type: "agent", ref: "nonexistent")
+
     assert empty.sessions == []
   end
 
@@ -4448,8 +4451,8 @@ defmodule JX.WorkspaceTest do
     assert result.host == "build-1"
     assert result.resources.ram_total_mb == 32768
     assert result.resources.ram_available_mb == 24576
-    assert result.resources.disk_total_mb == 204800
-    assert result.resources.disk_available_mb == 102400
+    assert result.resources.disk_total_mb == 204_800
+    assert result.resources.disk_available_mb == 102_400
     assert result.resources.cpu_cores == 16
     assert result.formula_recommended > 0
     assert result.recommended_worktrees == result.formula_recommended
@@ -4484,7 +4487,11 @@ defmodule JX.WorkspaceTest do
 
   test "set_project_capacity_profile stores a named preset on the project" do
     {:ok, _project} =
-      Workspace.add_project(%{name: "saysure", host_name: "build-1", repo_path: "/srv/repos/saysure"})
+      Workspace.add_project(%{
+        name: "saysure",
+        host_name: "build-1",
+        repo_path: "/srv/repos/saysure"
+      })
 
     assert {:ok, project} =
              Workspace.set_project_capacity_profile("saysure", "build-1", "elixir-phoenix")
@@ -4494,7 +4501,11 @@ defmodule JX.WorkspaceTest do
 
   test "set_project_capacity_profile rejects unknown profile names" do
     {:ok, _project} =
-      Workspace.add_project(%{name: "saysure", host_name: "build-1", repo_path: "/srv/repos/saysure"})
+      Workspace.add_project(%{
+        name: "saysure",
+        host_name: "build-1",
+        repo_path: "/srv/repos/saysure"
+      })
 
     assert {:error, message} =
              Workspace.set_project_capacity_profile("saysure", "build-1", "cobol-mainframe")

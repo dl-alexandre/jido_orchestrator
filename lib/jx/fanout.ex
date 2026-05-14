@@ -1367,7 +1367,8 @@ defmodule JX.Fanout do
 
     case check_fanout_host_capacity(run_path, host_name) do
       {:error, reason} ->
-        {:error, %{assignment_id: assignment["assignment_id"], reason: :host_at_capacity, detail: reason}}
+        {:error,
+         %{assignment_id: assignment["assignment_id"], reason: :host_at_capacity, detail: reason}}
 
       :ok ->
         do_launch_assignment(run_path, manifest, assignment, launched_at, opts)
@@ -1471,7 +1472,9 @@ defmodule JX.Fanout do
             host_active = Map.get(active_by_host, host_name, 0)
 
             if host_active + planned > limit do
-              ["host #{name}: #{planned} planned + #{host_active} active would exceed limit #{limit}"]
+              [
+                "host #{name}: #{planned} planned + #{host_active} active would exceed limit #{limit}"
+              ]
             else
               []
             end

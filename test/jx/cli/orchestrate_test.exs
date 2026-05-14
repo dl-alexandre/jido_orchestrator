@@ -1286,8 +1286,7 @@ defmodule JX.CLI.OrchestrateTest do
       raise "simulated exception"
     end)
 
-    assert {:error,
-            {:exception, %RuntimeError{message: "simulated exception"}, _stacktrace}} =
+    assert {:error, {:exception, %RuntimeError{message: "simulated exception"}, _stacktrace}} =
              Orchestrate.run(
                ["run", "--iterations", "1", "--interval-ms", "1"],
                start_app: start_app_callback(),

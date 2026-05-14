@@ -1584,7 +1584,9 @@ defmodule JX.DelegatedExecutionTest do
     register_capable_agent!("agent-confirm", "ws-confirm", now)
 
     assert {:ok, _claimed} =
-             DelegatedExecution.claim_assignment(assignment.assignment_id, "agent-confirm", now: now)
+             DelegatedExecution.claim_assignment(assignment.assignment_id, "agent-confirm",
+               now: now
+             )
 
     assert {:error, :confirmation_required} =
              DelegatedExecution.execute_assignment(
@@ -2121,7 +2123,9 @@ defmodule JX.DelegatedExecutionTest do
                now: now
              )
 
-    assert [summary] = DelegatedExecution.list_runner_sessions(runner_id: "runner-filter", now: now)
+    assert [summary] =
+             DelegatedExecution.list_runner_sessions(runner_id: "runner-filter", now: now)
+
     assert summary.session_id == session.session_id
 
     assert [summary2] =
@@ -2242,9 +2246,7 @@ defmodule JX.DelegatedExecutionTest do
     action = planned_action!("ws-rs-hb", "apr-rs-hb", "test")
     assert {:ok, assignment} = DelegatedExecution.create_assignment(action.action_id, now: now)
 
-    register_capable_runner!("runner-rs-hb", "agent-rs-hb", "ws-rs-hb", now,
-      ttl_seconds: 10
-    )
+    register_capable_runner!("runner-rs-hb", "agent-rs-hb", "ws-rs-hb", now, ttl_seconds: 10)
 
     assert {:ok, %{session: session}} =
              DelegatedExecution.claim_runner_assignment(

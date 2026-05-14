@@ -225,7 +225,12 @@ defmodule JX.CLI.HostTest do
     assert_received :started
 
     assert_received {:add_host,
-                     %{name: "build", transport: "ssh", ssh_target: "dev@example.test", workspace_path: "/srv/agent"}}
+                     %{
+                       name: "build",
+                       transport: "ssh",
+                       ssh_target: "dev@example.test",
+                       workspace_path: "/srv/agent"
+                     }}
   end
 
   # ---------------------------------------------------------------------------
