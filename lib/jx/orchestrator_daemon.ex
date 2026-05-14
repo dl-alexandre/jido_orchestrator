@@ -7,9 +7,13 @@ defmodule JX.OrchestratorDaemon do
   events in the shared database.
   """
 
+  alias JX.Hosts
   alias JX.Shell
   alias JX.ResourceOwnerships
   alias JX.Tmux
+
+  # Fallback per-host parallelism when no capacity_limit is set.
+  @per_host_default_parallel 3
 
   @default_session_name "jx-orchestrator"
   @default_interval_ms 15_000
@@ -173,7 +177,7 @@ defmodule JX.OrchestratorDaemon do
       observe: Keyword.get(opts, :observe, true),
       lines: Keyword.get(opts, :lines, @default_lines),
       scan_limit: Keyword.get(opts, :scan_limit, @default_scan_limit),
-      queue_limit: Keyword.get(opts, :queue_limit, @default_queue_limit),
+      queue_limit: Keyword.get(opts, :queue_limit, capacity_derived_queue_limit()),
       event_limit: Keyword.get(opts, :event_limit, @default_event_limit),
       decision_limit: Keyword.get(opts, :decision_limit, @default_decision_limit),
       min_observe_age_seconds:
@@ -341,6 +345,22 @@ defmodule JX.OrchestratorDaemon do
 
   defp put_ack_flag(args, true), do: args ++ ["--ack"]
   defp put_ack_flag(args, false), do: args ++ ["--no-ack"]
+
+  # Derive a queue_limit from registered host capacities so the orchestrator
+  # never queues more work than the fleet can actually process.
+  # Falls back to @default_queue_limit if the DB isn't available yet.
+  defp capacity_derived_queue_limit do
+    try do
+      total =
+        Hosts.list_hosts()
+        |> Enum.map(fn host -> host.capacity_limit || @per_host_default_parallel end)
+        |> Enum.sum()
+
+      max(total, @default_queue_limit)
+    rescue
+      _ -> @default_queue_limit
+    end
+  end
 
   defp default_cli_path(cwd) do
     bin_jx = Path.join(cwd, "bin/jx")

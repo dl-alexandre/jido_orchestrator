@@ -24,6 +24,7 @@ defmodule JX.WorkspaceTest do
   alias JX.SessionProfiles.OperatorProfile
   alias JX.SessionProfiles.SessionProfile
   alias JX.SessionWatches.SessionWatch
+  alias JX.HostCapacity.Observation, as: CapacityObservation
   alias JX.Tasks.Task
   alias JX.WakeTriggers.WakeTrigger
   alias JX.Workspace
@@ -63,6 +64,7 @@ defmodule JX.WorkspaceTest do
     Repo.delete_all(SessionControl)
     Repo.delete_all(Directive)
     Repo.delete_all(Resource)
+    Repo.delete_all(CapacityObservation)
     Repo.delete_all(Task)
     Repo.delete_all(Project)
     Repo.delete_all(Host)
@@ -4478,6 +4480,60 @@ defmodule JX.WorkspaceTest do
     assert {:ok, report} = Workspace.evaluate_all_capacity()
     assert length(report.results) == 1
     assert [%{host: "build-1", verdict: :insufficient_data}] = report.results
+  end
+
+  test "set_project_capacity_profile stores a named preset on the project" do
+    {:ok, _project} =
+      Workspace.add_project(%{name: "saysure", host_name: "build-1", repo_path: "/srv/repos/saysure"})
+
+    assert {:ok, project} =
+             Workspace.set_project_capacity_profile("saysure", "build-1", "elixir-phoenix")
+
+    assert project.capacity_profile == "elixir-phoenix"
+  end
+
+  test "set_project_capacity_profile rejects unknown profile names" do
+    {:ok, _project} =
+      Workspace.add_project(%{name: "saysure", host_name: "build-1", repo_path: "/srv/repos/saysure"})
+
+    assert {:error, message} =
+             Workspace.set_project_capacity_profile("saysure", "build-1", "cobol-mainframe")
+
+    assert message =~ "unknown profile"
+    assert message =~ "cobol-mainframe"
+  end
+
+  test "list_capacity_profiles returns all built-in presets" do
+    assert {:ok, profiles} = Workspace.list_capacity_profiles()
+    assert Map.has_key?(profiles, "elixir-phoenix")
+    assert Map.has_key?(profiles, "rails")
+    assert Map.has_key?(profiles, "nodejs")
+    assert Map.has_key?(profiles, "go")
+    assert Map.has_key?(profiles, "python-ml")
+  end
+
+  test "compute_target_parallel sums capacity limits across all hosts" do
+    # build-1 already set up in the test; set its capacity limit
+    Workspace.set_capacity_limit("build-1", 5)
+
+    {:ok, _host2} =
+      Workspace.add_host(%{
+        name: "build-2",
+        ssh_target: "developer@build2.example.test",
+        workspace_path: "/srv/agent"
+      })
+
+    Workspace.set_capacity_limit("build-2", 4)
+
+    summary = Workspace.delegation_timing()
+    # 5 + 4 = 9
+    assert summary.assignment.target_parallel == 9
+  end
+
+  test "delegation_timing falls back to per-host default when no capacity_limit set" do
+    summary = Workspace.delegation_timing()
+    # build-1 has no capacity_limit → uses @per_host_default_parallel (3)
+    assert summary.assignment.target_parallel == 3
   end
 
   test "promotion_preflight returns blocked when project gate has unverified push" do

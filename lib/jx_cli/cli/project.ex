@@ -14,6 +14,8 @@ defmodule JX.CLI.Project do
   @project_brief_usage "jx project brief <name> [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 80] [--scan-limit 100] [-n 5] [--json]"
   @project_ls_usage "jx project ls [--json]"
   @portfolio_summary_usage "jx portfolio summary [--host <host>] [--managed] [--all-processes] [--type <type>] [--ssh-target <target>] [--work-state <state>] [--control managed|ignored|protected|uncontrolled] [--no-observe] [--lines 80] [--scan-limit 100] [-n 25] [--json]"
+  @project_capacity_profile_usage "jx project capacity-profile <name> --host <host> --profile <profile>"
+  @project_capacity_profiles_usage "jx project capacity-profiles"
 
   def usage do
     [
@@ -22,7 +24,9 @@ defmodule JX.CLI.Project do
       @project_gate_usage,
       @project_brief_usage,
       @project_ls_usage,
-      @portfolio_summary_usage
+      @portfolio_summary_usage,
+      @project_capacity_profile_usage,
+      @project_capacity_profiles_usage
     ]
   end
 
@@ -48,6 +52,42 @@ defmodule JX.CLI.Project do
         "project #{project.name} registered: host=#{parsed[:host]} repo=#{project.repo_path}"
       )
 
+      :ok
+    end
+  end
+
+  def run(["capacity-profile", name | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args, strict: [host: :string, profile: :string])
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @project_capacity_profile_usage),
+         {:host, host_name} when is_binary(host_name) <- {:host, parsed[:host]},
+         {:profile, profile_name} when is_binary(profile_name) <- {:profile, parsed[:profile]},
+         :ok <- start_app(opts),
+         {:ok, project} <-
+           apply(workspace(opts), :set_project_capacity_profile, [name, host_name, profile_name]) do
+      IO.puts("project #{project.name} capacity profile set to #{project.capacity_profile}")
+      :ok
+    else
+      {:host, _} -> {:error, "usage: #{@project_capacity_profile_usage}"}
+      {:profile, _} -> {:error, "usage: #{@project_capacity_profile_usage}"}
+      other -> other
+    end
+  end
+
+  def run(["capacity-profiles"], opts) do
+    with :ok <- start_app(opts),
+         {:ok, profiles} <- apply(workspace(opts), :list_capacity_profiles, []) do
+      rows =
+        profiles
+        |> Map.values()
+        |> Enum.sort_by(& &1.name)
+        |> Enum.map(fn p ->
+          [p.name, "#{p.ram_mb_per_slot} MB", "#{p.disk_mb_per_slot} MB", "#{p.cpu_cores_per_slot} cores"]
+        end)
+
+      print_table(["PROFILE", "RAM/SLOT", "DISK/SLOT", "CPU/SLOT"], rows)
       :ok
     end
   end

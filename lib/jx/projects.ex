@@ -54,6 +54,18 @@ defmodule JX.Projects do
     end
   end
 
+  def set_capacity_profile(project_name, host_name, profile_name) do
+    case get_project_by_name(project_name, host_name) do
+      nil ->
+        {:error, :project_not_found}
+
+      project ->
+        project
+        |> Project.changeset(%{capacity_profile: profile_name})
+        |> Repo.update()
+    end
+  end
+
   def list_projects_by_name(name) do
     Project
     |> where([project], project.name == ^name)

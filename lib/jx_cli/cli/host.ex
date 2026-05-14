@@ -13,9 +13,10 @@ defmodule JX.CLI.Host do
   @hosts_doctor_usage "jx hosts doctor [--agent claude|opencode|codex] [--transport native|acpx] [--json]"
   @host_capacity_usage "jx host capacity <host> [--ram <mb>] [--disk <mb>] [--cpu <cores>]"
   @host_capacity_set_usage "jx host capacity set <host> <n>"
-  @host_capacity_eval_usage "jx host capacity eval <host>"
+  @host_capacity_eval_usage "jx host capacity eval <host> [--apply]"
+  @host_capacity_history_usage "jx host capacity history <host> [--limit <n>] [--json]"
   @hosts_capacity_usage "jx hosts capacity [--ram <mb>] [--disk <mb>] [--cpu <cores>] [--json]"
-  @hosts_capacity_eval_usage "jx hosts capacity eval [--json]"
+  @hosts_capacity_eval_usage "jx hosts capacity eval [--apply] [--json]"
 
   def usage_lines(:host),
     do: [
@@ -24,7 +25,8 @@ defmodule JX.CLI.Host do
       @host_doctor_usage,
       @host_capacity_usage,
       @host_capacity_set_usage,
-      @host_capacity_eval_usage
+      @host_capacity_eval_usage,
+      @host_capacity_history_usage
     ]
 
   def usage_lines(:hosts), do: [@hosts_doctor_usage, @hosts_capacity_usage, @hosts_capacity_eval_usage]
@@ -93,11 +95,38 @@ defmodule JX.CLI.Host do
     end
   end
 
-  def run(["capacity", "eval", name | rest], opts) do
-    with :ok <- expect_no_args(rest, @host_capacity_eval_usage),
+  def run(["capacity", "eval", name | args], opts) do
+    {parsed, rest, invalid} = OptionParser.parse(args, strict: [apply: :boolean])
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @host_capacity_eval_usage),
          :ok <- start_app(opts),
          {:ok, result} <- apply(workspace(opts), :evaluate_capacity, [name]) do
       print_eval_result(result)
+
+      if parsed[:apply] do
+        maybe_apply_suggestion(result, name, opts)
+      else
+        :ok
+      end
+    end
+  end
+
+  def run(["capacity", "history", name | args], opts) do
+    {parsed, rest, invalid} =
+      OptionParser.parse(args, strict: [limit: :integer, json: :boolean])
+
+    limit = parsed[:limit] || 20
+
+    with :ok <- validate_options(invalid),
+         :ok <- expect_no_args(rest, @host_capacity_history_usage),
+         :ok <- start_app(opts),
+         {:ok, history} <- apply(workspace(opts), :capacity_history, [name, limit]) do
+      if parsed[:json] do
+        print_json(%{capacity_history: history})
+      else
+        print_capacity_history(name, history)
+      end
       :ok
     end
   end
@@ -121,13 +150,20 @@ defmodule JX.CLI.Host do
 
   def run_plural(["capacity", "eval" | args], opts) do
     {parsed, rest, invalid} =
-      OptionParser.parse(args, strict: [json: :boolean])
+      OptionParser.parse(args, strict: [json: :boolean, apply: :boolean])
 
     with :ok <- validate_options(invalid),
          :ok <- expect_no_args(rest, @hosts_capacity_eval_usage),
          :ok <- start_app(opts),
          {:ok, report} <- apply(workspace(opts), :evaluate_all_capacity, []) do
       print_hosts_eval_report(report, json: parsed[:json] || false)
+
+      if parsed[:apply] do
+        Enum.each(report.results, fn result ->
+          maybe_apply_suggestion(result, result.host, opts)
+        end)
+      end
+
       :ok
     end
   end
@@ -382,6 +418,42 @@ defmodule JX.CLI.Host do
       print_eval_result(result)
     end)
   end
+
+  defp print_capacity_history(_name, []) do
+    IO.puts("no observations recorded yet")
+  end
+
+  defp print_capacity_history(name, observations) do
+    IO.puts("host #{name} — last #{length(observations)} observation(s)\n")
+
+    rows =
+      Enum.map(observations, fn o ->
+        load = if o.load_avg_1m, do: Float.round(o.load_avg_1m, 2) |> to_string(), else: "—"
+
+        [
+          Calendar.strftime(o.inserted_at, "%Y-%m-%d %H:%M"),
+          to_string(o.active_sessions),
+          "#{o.ram_available_mb}/#{o.ram_total_mb}",
+          "#{o.disk_available_mb}/#{o.disk_total_mb}",
+          load
+        ]
+      end)
+
+    print_table(["TIME", "SESSIONS", "RAM avail/total (MB)", "DISK avail/total (MB)", "LOAD"], rows)
+  end
+
+  defp maybe_apply_suggestion(%{verdict: verdict, suggested_limit: limit}, host_name, opts)
+       when verdict in [:raise, :lower] and is_integer(limit) do
+    case apply(workspace(opts), :set_capacity_limit, [host_name, limit]) do
+      {:ok, host} ->
+        IO.puts("  applied: capacity limit for #{host.name} set to #{host.capacity_limit}")
+
+      {:error, reason} ->
+        IO.puts("  apply failed for #{host_name}: #{inspect(reason)}")
+    end
+  end
+
+  defp maybe_apply_suggestion(_result, _host_name, _opts), do: :ok
 
   # ---------------------------------------------------------------------------
 

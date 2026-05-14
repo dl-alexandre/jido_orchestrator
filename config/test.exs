@@ -10,3 +10,6 @@ config :jx, JX.Repo,
   pool_size: 1
 
 config :logger, level: :warning
+
+# Disable background capacity polling in tests to avoid SSH calls and noise.
+config :jx, JX.HostCapacity.CapacityPoller, poll_interval_ms: 0

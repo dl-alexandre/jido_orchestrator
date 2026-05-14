@@ -74,7 +74,21 @@ defmodule JX.HostCapacity do
   """
   @spec assess(%Host{}, keyword()) :: {:ok, map()} | {:error, term()}
   def assess(%Host{} = host, opts \\ []) do
-    profile = Keyword.get(opts, :profile, @default_profile)
+    profile =
+      case Keyword.get(opts, :profile) do
+        nil ->
+          # Allow callers to pass a project struct; resolve its named profile.
+          case Keyword.get(opts, :project) do
+            %{capacity_profile: name} when is_binary(name) ->
+              JX.Projects.Project.resolve_profile(name) || @default_profile
+
+            _ ->
+              @default_profile
+          end
+
+        explicit ->
+          explicit
+      end
 
     with {:ok, resources} <- probe(host) do
       limits = %{

@@ -49,6 +49,12 @@ defmodule JX.Tasks do
     |> Repo.all()
   end
 
+  def count_running_for_host(host_id) do
+    Task
+    |> where([t], t.host_id == ^host_id and t.status == "running")
+    |> Repo.aggregate(:count)
+  end
+
   def insert_task(attrs) do
     %Task{}
     |> Task.changeset(attrs)

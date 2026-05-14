@@ -8,6 +8,8 @@ defmodule JX.Fanout do
   replayed from durable artifacts before any daemon or database layer exists.
   """
 
+  require Logger
+
   defmodule RunManifest do
     @moduledoc "Machine-readable fanout run manifest."
 
@@ -261,6 +263,7 @@ defmodule JX.Fanout do
          {:ok, assignments} <- read_assignments(run_path),
          :ok <- ensure_all_preflight_passed(assignments, opts),
          {:ok, targets} <- launch_targets(assignments, assignment_id),
+         :ok <- preflight_capacity(run_path, targets),
          {:ok, launched_at} <- timestamp(opts[:now]) do
       launches =
         Enum.map(targets, fn assignment ->
@@ -461,6 +464,32 @@ defmodule JX.Fanout do
 
   defp plan_assignments("coverage-dynamic", run_id, baseline, opts, run_path) do
     dynamic_coverage_assignments(run_id, baseline, opts, run_path)
+  end
+
+  @doc """
+  Scans `runs_root` for all active fanout assignments and returns
+  `%{host_name => count}`.  Used by `JX.HostCapacity.CapacityPoller`
+  to include fanout sessions in per-host active counts.
+
+  Pass the runs root directory (default `~/.jx/runs`).
+  """
+  def active_assignments_per_host(runs_root \\ Path.expand("~/.jx/runs")) do
+    case File.ls(runs_root) do
+      {:ok, run_dirs} ->
+        Enum.reduce(run_dirs, %{}, fn dir, acc ->
+          run_path = Path.join(runs_root, dir)
+
+          if File.dir?(run_path) do
+            per_host = active_fanout_assignments_per_host(run_path)
+            Map.merge(acc, per_host, fn _k, a, b -> a + b end)
+          else
+            acc
+          end
+        end)
+
+      _ ->
+        %{}
+    end
   end
 
   def dynamic_coverage_opts?(opts) do
@@ -1334,6 +1363,18 @@ defmodule JX.Fanout do
   end
 
   defp launch_assignment(run_path, manifest, assignment, launched_at, opts) do
+    host_name = get_in(assignment, ["resolved_environment", "host"])
+
+    case check_fanout_host_capacity(run_path, host_name) do
+      {:error, reason} ->
+        {:error, %{assignment_id: assignment["assignment_id"], reason: :host_at_capacity, detail: reason}}
+
+      :ok ->
+        do_launch_assignment(run_path, manifest, assignment, launched_at, opts)
+    end
+  end
+
+  defp do_launch_assignment(run_path, manifest, assignment, launched_at, opts) do
     lease_timeout = opts[:lease_timeout_seconds] || @default_lease_timeout_seconds
     script = launch_script(manifest, assignment, launched_at, lease_timeout, opts)
 
@@ -1408,6 +1449,64 @@ defmodule JX.Fanout do
            detail: inspect(reason),
            output: command_output(reason)
          }}
+    end
+  end
+
+  # Plan-time capacity check: group all targets by host and verify none would
+  # exceed its capacity_limit before a single launch script fires.
+  defp preflight_capacity(run_path, targets) do
+    planned_by_host =
+      Enum.reduce(targets, %{}, fn assignment, acc ->
+        host_name = get_in(assignment, ["resolved_environment", "host"])
+        Map.update(acc, host_name, 1, &(&1 + 1))
+      end)
+
+    # Accurate per-host active counts from the run directory.
+    active_by_host = active_fanout_assignments_per_host(run_path)
+
+    violations =
+      Enum.flat_map(planned_by_host, fn {host_name, planned} ->
+        case JX.Hosts.get_host_by_name(host_name) do
+          %{capacity_limit: limit, name: name} when is_integer(limit) ->
+            host_active = Map.get(active_by_host, host_name, 0)
+
+            if host_active + planned > limit do
+              ["host #{name}: #{planned} planned + #{host_active} active would exceed limit #{limit}"]
+            else
+              []
+            end
+
+          _ ->
+            []
+        end
+      end)
+
+    case violations do
+      [] -> :ok
+      _ -> {:error, {:capacity_preflight_failed, violations}}
+    end
+  end
+
+  defp check_fanout_host_capacity(_run_path, nil), do: :ok
+
+  defp check_fanout_host_capacity(run_path, host_name) do
+    case JX.Hosts.get_host_by_name(host_name) do
+      nil ->
+        :ok
+
+      %{capacity_limit: nil} ->
+        :ok
+
+      %{capacity_limit: limit, name: name} ->
+        active = Map.get(active_fanout_assignments_per_host(run_path), host_name, 0)
+
+        if active < limit do
+          :ok
+        else
+          {:error,
+           "host #{name} is at capacity (#{active}/#{limit} active fanout assignments); " <>
+             "wait for assignments to complete or raise: jx host capacity set #{name} <n>"}
+        end
     end
   end
 
@@ -1931,6 +2030,10 @@ defmodule JX.Fanout do
 
   defp pr_repo(_url), do: nil
 
+  # Number of retries for container-backed hosts where startup latency is high.
+  @container_max_retries 3
+  @container_retry_delay_ms 5_000
+
   defp run_assignment_script(assignment, script, opts) do
     runner = opts[:runner]
 
@@ -1948,29 +2051,56 @@ defmodule JX.Fanout do
 
   defp default_assignment_runner(assignment, script) do
     host = get_in(assignment, ["resolved_environment", "host"])
+    validation_prefix = get_in(assignment, ["resolved_environment", "validation_prefix"]) || ""
+    container_host? = String.contains?(validation_prefix, "docker")
 
-    if local_host?(host) do
-      case System.cmd("sh", ["-lc", script], stderr_to_stdout: true) do
-        {output, 0} -> {:ok, output}
-        {output, status} -> {:error, {:command_failed, status, output}}
+    max_retries = if container_host?, do: @container_max_retries, else: 0
+    retry_delay = if container_host?, do: @container_retry_delay_ms, else: 0
+
+    run_with_retries(host, script, max_retries, retry_delay, 0)
+  end
+
+  defp run_with_retries(host, script, max_retries, retry_delay_ms, attempt) do
+    result =
+      if local_host?(host) do
+        case System.cmd("sh", ["-lc", script], stderr_to_stdout: true) do
+          {output, 0} -> {:ok, output}
+          {output, status} -> {:error, {:command_failed, status, output}}
+        end
+      else
+        case System.cmd(
+               "ssh",
+               [
+                 "-o",
+                 "BatchMode=yes",
+                 "-o",
+                 "ConnectTimeout=10",
+                 "--",
+                 host,
+                 "sh -lc #{JX.Shell.quote(script)}"
+               ],
+               stderr_to_stdout: true
+             ) do
+          {output, 0} -> {:ok, output}
+          {output, status} -> {:error, {:ssh_failed, status, output}}
+        end
       end
-    else
-      case System.cmd(
-             "ssh",
-             [
-               "-o",
-               "BatchMode=yes",
-               "-o",
-               "ConnectTimeout=10",
-               "--",
-               host,
-               "sh -lc #{JX.Shell.quote(script)}"
-             ],
-             stderr_to_stdout: true
-           ) do
-        {output, 0} -> {:ok, output}
-        {output, status} -> {:error, {:ssh_failed, status, output}}
-      end
+
+    case result do
+      {:ok, _} ->
+        result
+
+      {:error, _} when attempt < max_retries ->
+        Logger.debug(
+          "[Fanout] script failed on #{host} (attempt #{attempt + 1}/#{max_retries + 1}), " <>
+            "retrying in #{retry_delay_ms}ms"
+        )
+
+        Process.sleep(retry_delay_ms)
+        run_with_retries(host, script, max_retries, retry_delay_ms, attempt + 1)
+
+      {:error, _} ->
+        result
     end
   end
 
@@ -2323,10 +2453,64 @@ defmodule JX.Fanout do
     end
   end
 
+  # States where we want a capacity snapshot: entering active work or leaving it.
+  @snapshot_states ~w(launching preflight_failed ci_green ci_failed ready)
+
   defp write_assignment!(run_path, assignment) do
     assignment_id = Map.fetch!(assignment, "assignment_id")
     write_json!(assignment_path(run_path, assignment_id), assignment)
+
+    if Map.get(assignment, "state") in @snapshot_states do
+      fire_fanout_capacity_snapshot(run_path, assignment)
+    end
+
     :ok
+  end
+
+  defp fire_fanout_capacity_snapshot(run_path, assignment) do
+    host_name = get_in(assignment, ["resolved_environment", "host"])
+
+    Task.start(fn ->
+      with %{} = host <- JX.Hosts.get_host_by_name(host_name) do
+        active = count_active_fanout_assignments(run_path)
+        JX.HostCapacity.Observer.snapshot(host, active)
+      end
+    end)
+  end
+
+  @fanout_active_states ~w(launching local_validated pr_opened ci_pending)
+
+  # Returns %{host_name => active_count} for all active assignments in the run.
+  defp active_fanout_assignments_per_host(run_path) do
+    assignments_dir = Path.join(run_path, "assignments")
+
+    case File.ls(assignments_dir) do
+      {:ok, files} ->
+        Enum.reduce(files, %{}, fn file, acc ->
+          path = Path.join(assignments_dir, file)
+
+          with {:ok, text} <- File.read(path),
+               {:ok, %{"state" => state} = assignment} <- Jason.decode(text),
+               true <- state in @fanout_active_states,
+               host_name when is_binary(host_name) <-
+                 get_in(assignment, ["resolved_environment", "host"]) do
+            Map.update(acc, host_name, 1, &(&1 + 1))
+          else
+            _ -> acc
+          end
+        end)
+
+      _ ->
+        %{}
+    end
+  end
+
+  # Convenience: total active assignments across all hosts in the run.
+  defp count_active_fanout_assignments(run_path) do
+    run_path
+    |> active_fanout_assignments_per_host()
+    |> Map.values()
+    |> Enum.sum()
   end
 
   defp read_json(path) do

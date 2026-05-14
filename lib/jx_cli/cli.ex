@@ -2175,7 +2175,7 @@ defmodule JX.CLI do
 
   defp dispatch_devide(args) do
     with :ok <- maybe_start_devide_state(args) do
-      case DevIDECLI.run(args, writer: &IO.write/1, trap_signals: true) do
+      case DevIDECLI.run(args, writer: &IO.write/1) do
         {0, ""} ->
           :ok
 

@@ -83,12 +83,28 @@ defmodule JX.HostCapacity.Observer do
   # ---------------------------------------------------------------------------
 
   defp probe_load_avg(%Host{} = host) do
+    # Always probe the host directly via the SSH adapter, bypassing any
+    # validation_prefix (e.g. "docker compose run --rm app").  This ensures
+    # we read host-level load, not container-level load.
+    #
+    # Priority order:
+    #   1. /proc/loadavg  – Linux bare-metal and most container hosts that
+    #      expose host procfs (or have their own scheduler info)
+    #   2. sysctl kern.boottime trick (macOS)  – load avg via sysctl vm.loadavg
+    #   3. uptime(1)  – fallback; parsed carefully to handle both Linux and
+    #      macOS output formats without relying on locale-specific words
+    #   4. Empty string  – host doesn't expose any load avg; stored as nil
     script = """
     set -eu
     if [ -r /proc/loadavg ]; then
-      awk '{ print $1 }' /proc/loadavg
+      awk '{ printf "%.2f", $1 }' /proc/loadavg
+    elif command -v sysctl >/dev/null 2>&1 && sysctl -n vm.loadavg >/dev/null 2>&1; then
+      sysctl -n vm.loadavg | awk '{ printf "%.2f", $2 }'
     elif command -v uptime >/dev/null 2>&1; then
-      uptime | awk -F'[,:]' '{ for(i=1;i<=NF;i++) if ($i ~ /load/) { print $(i+1)+0; exit } }'
+      uptime | awk '
+        /load average/  { match($0, /load average[s]?:[ \t]*([0-9.]+)/, a); if (a[1]) { printf "%.2f", a[1]; exit } }
+        /load averages/ { match($0, /load averages:[ \t]*([0-9.]+)/, a); if (a[1]) { printf "%.2f", a[1]; exit } }
+      '
     else
       printf ""
     fi

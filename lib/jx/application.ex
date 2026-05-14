@@ -11,7 +11,8 @@ defmodule JX.Application do
       [
         JX.Repo,
         JX.Jido,
-        JX.OrchestratorRuntime
+        JX.OrchestratorRuntime,
+        JX.HostCapacity.CapacityPoller
       ] ++ JX.OrchestratorMonitorSensor.child_specs()
 
     opts = [strategy: :one_for_one, name: JX.Supervisor]

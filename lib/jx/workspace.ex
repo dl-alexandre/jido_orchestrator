@@ -29,6 +29,7 @@ defmodule JX.Workspace do
   alias JX.Directives
   alias JX.GitWorktrees
   alias JX.GoogleMeet
+  alias JX.HostCapacity.Observer, as: CapacityObserver
   alias JX.HostDoctor
   alias JX.Hosts
   alias JX.IDs
@@ -721,7 +722,25 @@ defmodule JX.Workspace do
 
   def delegation_reviews(opts \\ []), do: Delegations.list_reviews(opts)
 
-  def delegation_timing(opts \\ []), do: Delegations.timing_summary(opts)
+  def delegation_timing(opts \\ []) do
+    opts = Keyword.put_new_lazy(opts, :target_parallel, &compute_target_parallel/0)
+    Delegations.timing_summary(opts)
+  end
+
+  # Sum the capacity_limit across all registered hosts.  Hosts without a
+  # set limit contribute a conservative per-host default so the number is
+  # never zero.  This gives the orchestrator a data-driven parallelism ceiling
+  # rather than the hardcoded value of 3.
+  @per_host_default_parallel 3
+
+  defp compute_target_parallel do
+    Hosts.list_hosts()
+    |> Enum.map(fn host ->
+      host.capacity_limit || @per_host_default_parallel
+    end)
+    |> Enum.sum()
+    |> max(1)
+  end
 
   def decide_delegation_review(delegation_id, decision, attrs \\ []),
     do: Delegations.decide_review(delegation_id, decision, attrs)
@@ -1260,8 +1279,11 @@ defmodule JX.Workspace do
   def capacity_hosts(opts \\ []) do
     results =
       Hosts.list_hosts()
+      |> Enum.map(&Hosts.get_host_with_projects_by_name(&1.name))
       |> Enum.map(fn host ->
-        case JX.HostCapacity.assess(host, opts) do
+        host_opts = Keyword.put_new(opts, :profile, dominant_project_profile(host))
+
+        case JX.HostCapacity.assess(host, host_opts) do
           {:ok, result} -> result
           {:error, reason} -> %{host: host.name, error: inspect(reason)}
         end
@@ -1270,8 +1292,35 @@ defmodule JX.Workspace do
     {:ok, %{generated_at: DateTime.utc_now(), results: results}}
   end
 
+  # Returns the most resource-intensive profile across all projects on the host,
+  # or nil (which lets assess/2 fall back to the default) if none are set.
+  defp dominant_project_profile(%{projects: projects}) when is_list(projects) do
+    projects
+    |> Enum.flat_map(fn p ->
+      case Projects.Project.resolve_profile(p.capacity_profile) do
+        nil -> []
+        profile -> [profile]
+      end
+    end)
+    |> Enum.max_by(& &1.ram_mb_per_slot, fn -> nil end)
+  end
+
+  defp dominant_project_profile(_), do: nil
+
   def set_capacity_limit(host_name, limit) do
     Hosts.set_capacity_limit(host_name, limit)
+  end
+
+  def set_project_capacity_profile(project_name, host_name, profile_name) do
+    if profile_name in Projects.Project.profile_names() do
+      Projects.set_capacity_profile(project_name, host_name, profile_name)
+    else
+      {:error, "unknown profile #{inspect(profile_name)}; valid: #{Enum.join(Projects.Project.profile_names(), ", ")}"}
+    end
+  end
+
+  def list_capacity_profiles do
+    {:ok, Projects.Project.profiles()}
   end
 
   def snapshot_capacity(host_name, active_sessions) do
@@ -1289,6 +1338,13 @@ defmodule JX.Workspace do
       host ->
         eval_opts = Keyword.put_new(opts, :current_limit, host.capacity_limit)
         {:ok, JX.HostCapacity.Evaluator.evaluate(host_name, eval_opts)}
+    end
+  end
+
+  def capacity_history(host_name, limit \\ 20) do
+    case Hosts.get_host_by_name(host_name) do
+      nil -> {:error, :host_not_found}
+      _host -> {:ok, JX.HostCapacity.Observer.recent(host_name, limit)}
     end
   end
 
@@ -1312,7 +1368,8 @@ defmodule JX.Workspace do
 
     with :ok <- validate_agent_transport(agent_transport),
          :ok <- validate_goal_options(goal_objective, agent_name, agent_transport),
-         {:project, %{} = project} <- {:project, assign_project(project_name, host_name)} do
+         {:project, %{} = project} <- {:project, assign_project(project_name, host_name)},
+         :ok <- check_host_capacity_with_project(project.host, project) do
       host = project.host
 
       prompt_hash =
@@ -6339,8 +6396,12 @@ defmodule JX.Workspace do
       |> Map.merge(paths)
 
     case Tasks.insert_task(task_attrs) do
-      {:ok, task} -> Tasks.get_task_by_id(task.task_id)
-      {:error, changeset} -> raise "could not adopt task: #{inspect(changeset.errors)}"
+      {:ok, task} ->
+        fire_capacity_snapshot(host)
+        Tasks.get_task_by_id(task.task_id)
+
+      {:error, changeset} ->
+        raise "could not adopt task: #{inspect(changeset.errors)}"
     end
   end
 
@@ -6354,10 +6415,13 @@ defmodule JX.Workspace do
 
     case SSH.adapter(host).run(host, script) do
       {:ok, _output} ->
-        Tasks.update_status(task, "running")
+        result = Tasks.update_status(task, "running")
+        fire_capacity_snapshot(host)
+        result
 
       {:error, reason} ->
         {:ok, failed_task} = Tasks.update_status(task, "error", inspect(reason))
+        fire_capacity_snapshot(host)
         {:error, {reason, failed_task}}
     end
   end
@@ -6367,10 +6431,13 @@ defmodule JX.Workspace do
 
     case SSH.adapter(host).run(host, script) do
       {:ok, _output} ->
-        Tasks.update_status(task, "running")
+        result = Tasks.update_status(task, "running")
+        fire_capacity_snapshot(host)
+        result
 
       {:error, reason} ->
         {:ok, failed_task} = Tasks.update_status(task, "error", inspect(reason))
+        fire_capacity_snapshot(host)
         {:error, {reason, failed_task}}
     end
   end
@@ -6385,12 +6452,18 @@ defmodule JX.Workspace do
     Tasks.update_launch_command(task, launch_command)
   end
 
+  @capacity_snapshot_statuses ~w(completed failed stopped error)
+
   defp status_for_task(task) do
     case SSH.adapter(task.host).run(task.host, Tmux.status_script(task)) do
       {:ok, output} ->
         {session_status, last_activity, exit_status} = parse_remote_status(output)
         {status, last_error} = task_status(session_status, exit_status)
         {:ok, updated_task} = Tasks.update_status(task, status, last_error)
+
+        if status in @capacity_snapshot_statuses do
+          fire_capacity_snapshot(task.host)
+        end
 
         %{
           task: %{updated_task | host: task.host, project: task.project},
@@ -6613,6 +6686,40 @@ defmodule JX.Workspace do
       {integer, ""} -> integer
       _other -> nil
     end
+  end
+
+  # Returns :ok if the host has room for another session, or {:error, ...} if at limit.
+  # When an operator-set capacity_limit exists, it is a hard ceiling.
+  # When no limit is set, we pass through — the operator has not chosen to enforce one yet.
+  defp check_host_capacity(%{capacity_limit: nil}), do: :ok
+
+  defp check_host_capacity(%{id: host_id, capacity_limit: limit, name: name})
+       when is_integer(limit) do
+    running = Tasks.count_running_for_host(host_id)
+
+    if running < limit do
+      :ok
+    else
+      {:error,
+       "host #{name} is at capacity (#{running}/#{limit} sessions running); " <>
+         "wait for a session to finish or raise the limit with: jx host capacity set #{name} <n>"}
+    end
+  end
+
+  # Capacity check that also accepts a project so callers can pass richer context.
+  # Currently the project is used for profile resolution in assess/2 but the
+  # hard-limit check is identical — kept as a separate head so future per-project
+  # sub-limits can be added without touching callers.
+  defp check_host_capacity_with_project(host, _project), do: check_host_capacity(host)
+
+  # Fire-and-forget capacity snapshot.  Spawns an unlinked process so failures
+  # in the SSH probe don't propagate back into the task lifecycle path.
+  defp fire_capacity_snapshot(%{id: host_id} = host) do
+    active = Tasks.count_running_for_host(host_id)
+
+    Task.start(fn ->
+      CapacityObserver.snapshot(host, active)
+    end)
   end
 
   defp task_json(project, host, task) do
