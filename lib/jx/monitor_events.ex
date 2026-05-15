@@ -114,7 +114,15 @@ defmodule JX.MonitorEvents do
     cursor = get_cursor(consumer)
     limit = Keyword.get(opts, :limit, 20)
     unread_total = unread_count(cursor.last_event_id)
-    matching_unread_total = unread_count(cursor.last_event_id, opts)
+
+    # When no filter opts are set, the filtered count is by definition equal
+    # to the unfiltered count — skip the second roundtrip.
+    matching_unread_total =
+      if any_unread_filter?(opts) do
+        unread_count(cursor.last_event_id, opts)
+      else
+        unread_total
+      end
 
     events =
       Event
@@ -341,6 +349,14 @@ defmodule JX.MonitorEvents do
     Event
     |> where([event], event.id > ^last_event_id)
     |> Repo.aggregate(:count, :id)
+  end
+
+  # A filter is "present" when its opts key is given with a non-nil value.
+  # `kinds: []` counts as present — it deliberately yields a zero match.
+  defp any_unread_filter?(opts) do
+    Enum.any?([:ref, :kind, :kinds, :severity], fn key ->
+      Keyword.get(opts, key) != nil
+    end)
   end
 
   defp unread_count(last_event_id, opts) do
