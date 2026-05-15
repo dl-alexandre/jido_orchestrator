@@ -72,7 +72,22 @@ defmodule JX.OperationalEvents do
     end
   end
 
-  def record_many(events) when is_list(events), do: Enum.map(events, &record/1)
+  def record_many([]), do: []
+
+  def record_many(events) when is_list(events) do
+    # Per-row record/1 builds a changeset (validations, normalization, the
+    # severity-conflict shadow logic in record/1 above). Wrapping the calls
+    # in a single transaction lets SQLite WAL coalesce the per-insert
+    # fsyncs while preserving the same per-row semantics — N inserts, 1
+    # fsync. A full bulk insert_all would require lifting the changeset
+    # logic out of record/1 and is tracked separately.
+    {:ok, results} =
+      Repo.transaction(fn ->
+        Enum.map(events, &record/1)
+      end)
+
+    results
+  end
 
   def list(opts \\ []) do
     limit = Keyword.get(opts, :limit, 100)
@@ -374,13 +389,24 @@ defmodule JX.OperationalEvents do
   defp decode_json(_text, fallback), do: fallback
 
   defp text_field(map, key) when is_map(map) do
-    case Map.get(map, key) || Map.get(map, String.to_atom(key)) do
+    case Map.get(map, key) || atom_key_lookup(map, key) do
       value when value in [nil, ""] -> nil
       value -> to_string(value)
     end
   end
 
   defp text_field(_map, _key), do: nil
+
+  # `String.to_existing_atom/1` is safe against atom-table exhaustion if a
+  # future caller passes user-derived keys: the atom must already exist or
+  # the rescue returns nil. Current callers all pass literal strings.
+  defp atom_key_lookup(map, key) when is_binary(key) do
+    Map.get(map, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp atom_key_lookup(_map, _key), do: nil
 
   defp event_id do
     random =
