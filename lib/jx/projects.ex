@@ -11,9 +11,9 @@ defmodule JX.Projects do
 
   def list_projects do
     Project
+    |> order_by([p], asc: p.name)
+    |> preload(:host)
     |> Repo.all()
-    |> Repo.preload(:host)
-    |> Enum.sort_by(& &1.name)
   end
 
   def upsert_project(%{host_name: host_name} = attrs) when is_binary(host_name) do
