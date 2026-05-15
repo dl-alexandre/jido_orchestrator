@@ -23,15 +23,19 @@ defmodule JX.Projects do
         |> Map.delete(:host_name)
         |> Map.put(:host_id, host.id)
 
-      project =
-        Repo.get_by(Project,
-          name: Map.fetch!(project_attrs, :name),
-          host_id: Map.fetch!(project_attrs, :host_id)
-        ) || %Project{}
-
-      project
+      # Single-roundtrip upsert keyed on the (host_id, name) unique index.
+      # Safe because the only caller (Workspace.add_project) always passes
+      # the full required attribute set (name, repo_path, host_name) — the
+      # changeset's validate_required check therefore passes on the fresh
+      # struct path. `replace_all_except` keeps the immutable id and the
+      # original inserted_at.
+      %Project{}
       |> Project.changeset(project_attrs)
-      |> Repo.insert_or_update()
+      |> Repo.insert(
+        on_conflict: {:replace_all_except, [:id, :inserted_at]},
+        conflict_target: [:host_id, :name],
+        returning: true
+      )
     else
       nil -> {:error, :host_not_found}
     end
