@@ -65,13 +65,39 @@ defmodule JX.SessionObservations do
 
   def list_changes(opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
-    history_limit = Keyword.get(opts, :history_limit, max(limit * 5, 100))
 
-    SessionObservation
-    |> maybe_filter_ref(Keyword.get(opts, :ref))
-    |> maybe_filter_refs(Keyword.get(opts, :refs))
-    |> order_by([observation], desc: observation.id)
-    |> limit(^history_limit)
+    base =
+      SessionObservation
+      |> maybe_filter_ref(Keyword.get(opts, :ref))
+      |> maybe_filter_refs(Keyword.get(opts, :refs))
+
+    # Top-2 observations per ref via ROW_NUMBER(): latest is rn=1, previous
+    # is rn=2. Replaces the old over-fetch (default max(limit*5, 100) rows)
+    # that pulled lots of historical observations and grouped them in
+    # Elixir. SQLite 3.25+ supports window functions; we're on 3.44.
+    #
+    # change_for_ref/1 only needs the top two rows to compute the diff —
+    # anything beyond rn=2 was discarded in the old code anyway.
+    windowed =
+      from(o in base,
+        select: %{
+          id: o.id,
+          rn:
+            fragment(
+              "ROW_NUMBER() OVER (PARTITION BY ? ORDER BY ? DESC)",
+              o.ref,
+              o.id
+            )
+        }
+      )
+
+    top_ids =
+      from(w in subquery(windowed),
+        where: w.rn <= 2,
+        select: w.id
+      )
+
+    from(o in SessionObservation, where: o.id in subquery(top_ids))
     |> Repo.all()
     |> Enum.group_by(& &1.ref)
     |> Enum.map(&change_for_ref/1)

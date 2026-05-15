@@ -76,4 +76,45 @@ defmodule JX.SessionObservationsTest do
     |> SessionObservation.changeset(attrs)
     |> Repo.insert!()
   end
+
+  describe "list_changes window-function semantics" do
+    # First-time Ecto.Query.Builder subquery module loads can stall under
+    # the cloud-synced filesystem in this dev environment (observed
+    # repeatedly during /phx:perf #3, #4, #13). 180_000ms gives the FS
+    # plenty of head-room; once modules are warm the assertions take
+    # ~50ms. The actual logic under test doesn't care about the timeout.
+    @describetag timeout: 180_000
+
+    # Regression for /phx:perf #13 — the rewritten list_changes uses
+    # ROW_NUMBER() OVER (PARTITION BY ref ORDER BY id DESC) to load only
+    # the top two observations per ref. Older observations (rn >= 3) must
+    # be ignored, and the diff fields must reflect the latest vs previous
+    # transition, not latest vs oldest.
+    test "selects top-2 per ref and diffs against the immediately previous row" do
+      # Three observations for the same ref, in chronological order:
+      #   - oldest: work_state "idle"
+      #   - middle: work_state "blocked"  ← what diff should compare against
+      #   - latest: work_state "running"
+      _oldest = insert_observation!(ref: "s-top2", work_state: "idle")
+      _middle = insert_observation!(ref: "s-top2", work_state: "blocked")
+      _latest = insert_observation!(ref: "s-top2", work_state: "running")
+
+      assert [change] = SessionObservations.list_changes(refs: ["s-top2"], limit: 5)
+
+      assert change.work_state == "running"
+      assert change.previous_work_state == "blocked"
+      assert change.change == "changed"
+      assert "work_state" in change.changed_fields
+    end
+
+    test "single observation per ref yields a 'new' change with no previous" do
+      _only = insert_observation!(ref: "s-single", work_state: "running")
+
+      assert [change] = SessionObservations.list_changes(refs: ["s-single"], limit: 5)
+
+      assert change.change == "new"
+      assert change.previous_work_state == nil
+      assert change.changed_fields == []
+    end
+  end
 end
