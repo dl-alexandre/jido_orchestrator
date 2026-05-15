@@ -2473,7 +2473,9 @@ defmodule JX.Fanout do
   defp fire_fanout_capacity_snapshot(run_path, assignment) do
     host_name = get_in(assignment, ["resolved_environment", "host"])
 
-    Task.start(fn ->
+    # Supervised fire-and-forget — see comment on fire_capacity_snapshot/1
+    # in JX.Workspace for the rationale.
+    Task.Supervisor.start_child(JX.TaskSupervisor, fn ->
       with %{} = host <- JX.Hosts.get_host_by_name(host_name) do
         active = count_active_fanout_assignments(run_path)
         JX.HostCapacity.Observer.snapshot(host, active)

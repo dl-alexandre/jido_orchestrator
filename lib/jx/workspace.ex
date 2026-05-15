@@ -6713,12 +6713,14 @@ defmodule JX.Workspace do
   # sub-limits can be added without touching callers.
   defp check_host_capacity_with_project(host, _project), do: check_host_capacity(host)
 
-  # Fire-and-forget capacity snapshot.  Spawns an unlinked process so failures
-  # in the SSH probe don't propagate back into the task lifecycle path.
+  # Fire-and-forget capacity snapshot.  Runs under JX.TaskSupervisor so SSH
+  # probe failures are logged rather than silently dropped, while still being
+  # unlinked from the calling process (supervisor restart strategy is
+  # :temporary by default — no propagation back to the task lifecycle path).
   defp fire_capacity_snapshot(%{id: host_id} = host) do
     active = Tasks.count_running_for_host(host_id)
 
-    Task.start(fn ->
+    Task.Supervisor.start_child(JX.TaskSupervisor, fn ->
       CapacityObserver.snapshot(host, active)
     end)
   end

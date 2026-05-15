@@ -184,32 +184,46 @@ defmodule JX.OperationalLeases do
   end
 
   def expire_all(now \\ DateTime.utc_now()) do
-    Lease
-    |> where([lease], lease.status == "active")
-    |> where([lease], lease.expires_at <= ^now)
-    |> Repo.all()
-    |> Enum.map(&expire_lease(&1, now))
+    {_count, expired} =
+      Lease
+      |> where([lease], lease.status == "active")
+      |> where([lease], lease.expires_at <= ^now)
+      |> select([lease], lease)
+      |> Repo.update_all(set: [status: "expired", active_key: nil, released_at: now])
+
+    emit_lease_expiry_events(expired)
+    expired
   end
 
   def active_key(resource_type, resource_id), do: "#{resource_type}:#{resource_id}"
 
   defp expire_resource_stale(resource_type, resource_id, now) do
-    Lease
-    |> where([lease], lease.active_key == ^active_key(resource_type, resource_id))
-    |> where([lease], lease.status == "active")
-    |> where([lease], lease.expires_at <= ^now)
-    |> Repo.all()
-    |> Enum.each(&expire_lease(&1, now))
+    {_count, expired} =
+      Lease
+      |> where([lease], lease.active_key == ^active_key(resource_type, resource_id))
+      |> where([lease], lease.status == "active")
+      |> where([lease], lease.expires_at <= ^now)
+      |> select([lease], lease)
+      |> Repo.update_all(set: [status: "expired", active_key: nil, released_at: now])
+
+    emit_lease_expiry_events(expired)
   end
 
-  defp expire_lease(%Lease{} = lease, now) do
-    lease =
-      lease
-      |> Lease.changeset(%{status: "expired", active_key: nil, released_at: now})
-      |> Repo.update!()
+  # The events are still inserted one row at a time (record_lease/3 builds
+  # per-lease payload metadata), but wrapping them in a single transaction
+  # lets SQLite WAL coalesce the fsyncs. Full event batching (insert_all
+  # against operational_events) is tracked as a follow-up — see Ecto perf
+  # finding #14.
+  defp emit_lease_expiry_events([]), do: :ok
 
-    _ = OperationalEvents.record_lease(lease, "lease.expired", severity: "warning")
-    lease
+  defp emit_lease_expiry_events(expired) do
+    Repo.transaction(fn ->
+      Enum.each(expired, fn lease ->
+        OperationalEvents.record_lease(lease, "lease.expired", severity: "warning")
+      end)
+    end)
+
+    :ok
   end
 
   defp release_active_lease(%Lease{} = lease, now) do

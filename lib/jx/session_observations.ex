@@ -33,18 +33,22 @@ defmodule JX.SessionObservations do
   def record_snapshot(%{sessions: sessions}), do: record_sessions(sessions)
 
   def record_sessions(sessions) do
-    Repo.transaction(fn ->
-      Enum.map(sessions, fn session ->
-        attrs = observation_attrs(session)
+    now = DateTime.utc_now()
+    expected = length(sessions)
 
-        %SessionObservation{}
-        |> SessionObservation.changeset(attrs)
-        |> Repo.insert()
-        |> case do
-          {:ok, observation} -> observation
-          {:error, changeset} -> Repo.rollback(changeset)
-        end
+    maps =
+      Enum.map(sessions, fn session ->
+        session |> observation_attrs() |> Map.put(:inserted_at, now)
       end)
+
+    Repo.transaction(fn ->
+      case Repo.insert_all(SessionObservation, maps, returning: true) do
+        {^expected, observations} ->
+          observations
+
+        {count, _partial} ->
+          Repo.rollback({:partial_insert, count, expected})
+      end
     end)
   end
 

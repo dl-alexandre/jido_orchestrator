@@ -27,7 +27,10 @@ defmodule JX.DevIDE.RunnerReconciler do
       interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms)
     }
 
-    send(self(), :reconcile)
+    # Defer the first reconcile so the rest of the supervision tree (notably
+    # JX.Repo) has time to come up before we hit it. Subsequent ticks are
+    # scheduled by handle_info/2 at state.interval_ms.
+    Process.send_after(self(), :reconcile, state.interval_ms)
     {:ok, state}
   end
 
@@ -37,4 +40,7 @@ defmodule JX.DevIDE.RunnerReconciler do
     Process.send_after(self(), :reconcile, state.interval_ms)
     {:noreply, state}
   end
+
+  @impl true
+  def handle_info(_msg, state), do: {:noreply, state}
 end

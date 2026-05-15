@@ -10,8 +10,10 @@ defmodule JX.Application do
     children =
       [
         JX.Repo,
+        {Task.Supervisor, name: JX.TaskSupervisor},
         JX.Jido,
         JX.OrchestratorRuntime,
+        JX.DevIDE.RunnerReconciler,
         JX.HostCapacity.CapacityPoller
       ] ++ JX.OrchestratorMonitorSensor.child_specs()
 
@@ -25,10 +27,19 @@ defmodule JX.Application do
 
   defp maybe_burrito_dispatch do
     if burrito_running?() do
-      Task.start(fn ->
-        args = apply(Burrito.Util.Args, :get_arguments, [])
-        JX.CLI.main(args)
-        System.stop(0)
+      # Supervised so a CLI crash is logged rather than swallowed silently.
+      # The try/rescue ensures System.stop is always called — without it, an
+      # exception in JX.CLI.main hangs the BEAM forever with no exit code.
+      Task.Supervisor.start_child(JX.TaskSupervisor, fn ->
+        try do
+          args = apply(Burrito.Util.Args, :get_arguments, [])
+          JX.CLI.main(args)
+          System.stop(0)
+        rescue
+          error ->
+            IO.puts(:stderr, "jx: fatal error: #{Exception.message(error)}")
+            System.stop(1)
+        end
       end)
     end
   end
