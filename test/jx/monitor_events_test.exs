@@ -1,6 +1,8 @@
 defmodule JX.MonitorEventsTest do
   use ExUnit.Case, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias JX.MonitorEvents
   alias JX.MonitorEvents.Event
   alias JX.Notifications
@@ -127,5 +129,96 @@ defmodule JX.MonitorEventsTest do
 
     assert %{saved: 1, notifications: [notification]} = Notifications.record_events([event])
     assert notification.kind == "orchestrator.health"
+  end
+
+  describe "dedup semantics" do
+    # Regression coverage for /phx:perf finding #3 — the batched dedup must
+    # preserve the state-change-log semantic. A UNIQUE(ref, kind, fingerprint)
+    # constraint would have silently broken this case (X → Y → X).
+    test "state-change reversion (X → Y → X) keeps all three transitions" do
+      ref = "task-reversion-1"
+      kind = "session.changed"
+
+      record_state = fn fp ->
+        MonitorEvents.record_event(%{
+          kind: kind,
+          severity: "notice",
+          ref: ref,
+          fingerprint: fp,
+          payload: %{fp: fp}
+        })
+      end
+
+      assert {:ok, [_]} = record_state.("X")
+      # Consecutive duplicate against latest → dropped.
+      assert {:ok, []} = record_state.("X")
+      # State change → kept.
+      assert {:ok, [_]} = record_state.("Y")
+      # Reversion back to X → kept (not a UNIQUE violation).
+      assert {:ok, [_]} = record_state.("X")
+
+      persisted =
+        from(e in Event, where: e.ref == ^ref and e.kind == ^kind, order_by: [asc: e.id])
+        |> Repo.all()
+        |> Enum.map(& &1.fingerprint)
+
+      assert persisted == ["X", "Y", "X"]
+    end
+
+    # The previous per-row dedup left an implicit gap: two same-fingerprint
+    # events in the same batch (with no prior DB row for that ref/kind) both
+    # inserted. The batched fold closes that — within a batch the latest-
+    # fingerprint map is updated as events are kept.
+    test "same-fingerprint events within one batch collapse to one row" do
+      alert = %{
+        daemon_key: "daemon-batch-dup",
+        kind: "orchestrator.health",
+        severity: "warning",
+        status: "degraded",
+        summary: "duplicated health alert",
+        fingerprint: "FP-IDENTICAL"
+      }
+
+      # scan_events maps daemon_health_alerts 1:1 — two identical alerts
+      # produce two events with identical (ref, kind, fingerprint).
+      assert {:ok, [_only_one]} =
+               MonitorEvents.record_scan(%{daemon_health_alerts: [alert, alert]})
+
+      persisted =
+        from(e in Event, where: e.ref == "daemon-batch-dup")
+        |> Repo.all()
+
+      assert length(persisted) == 1
+    end
+
+    # A genuine state change within the same batch (different fingerprints
+    # for the same ref/kind) must still produce two rows — the batch-internal
+    # dedup is "consecutive same fingerprint," not "any duplicate."
+    test "differing fingerprints within one batch both persist" do
+      alert_a = %{
+        daemon_key: "daemon-state-change",
+        kind: "orchestrator.health",
+        severity: "warning",
+        status: "degraded",
+        summary: "state A",
+        fingerprint: "FP-A"
+      }
+
+      alert_b = %{alert_a | summary: "state B", fingerprint: "FP-B"}
+
+      assert {:ok, events} =
+               MonitorEvents.record_scan(%{daemon_health_alerts: [alert_a, alert_b]})
+
+      assert length(events) == 2
+
+      # daemon_health_event re-hashes the `:fingerprint` input, so we can't
+      # assert literal values — assert the invariant that matters: both rows
+      # persisted and their fingerprints are distinct (a real state change).
+      [first, second] =
+        from(e in Event, where: e.ref == "daemon-state-change", order_by: [asc: e.id])
+        |> Repo.all()
+
+      assert first.fingerprint != second.fingerprint
+    end
   end
 end

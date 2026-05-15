@@ -185,34 +185,107 @@ defmodule JX.MonitorEvents do
     }
   end
 
+  # Persists a batch of candidate events with deduplication semantics that
+  # match the original per-row `duplicate_latest?/1` check, but in a single
+  # round-trip lookup instead of N. An event is dropped iff its fingerprint
+  # equals the most-recently-kept fingerprint for its (ref, kind). The fold
+  # carries the latest-fingerprint map forward through the batch, so events
+  # *within* the same batch are deduplicated against each other too —
+  # closing the implicit gap in the previous implementation.
+  #
+  # Returns {:ok, inserted_events} on success.
+  defp insert_new_events([]), do: {:ok, []}
+
   defp insert_new_events(events) do
+    now = DateTime.utc_now()
+    prepared = Enum.map(events, &prepare_event_attrs(&1, now))
+    latest_map = fetch_latest_fingerprints_for(prepared)
+
+    {kept_rev, _final_latest} =
+      Enum.reduce(prepared, {[], latest_map}, fn attrs, {kept, latest} ->
+        key = {Map.get(attrs, :ref, ""), Map.fetch!(attrs, :kind)}
+        fp = Map.fetch!(attrs, :fingerprint)
+
+        if Map.get(latest, key) == fp do
+          {kept, latest}
+        else
+          {[attrs | kept], Map.put(latest, key, fp)}
+        end
+      end)
+
+    kept = Enum.reverse(kept_rev)
+    expected = length(kept)
+
     Repo.transaction(fn ->
-      events
-      |> Enum.reject(&duplicate_latest?/1)
-      |> Enum.map(&insert_event!/1)
+      case Repo.insert_all(Event, kept, returning: true) do
+        {^expected, inserted} ->
+          inserted
+
+        {n, _partial} ->
+          Repo.rollback({:partial_insert, n, expected})
+      end
     end)
   end
 
-  defp insert_event!(attrs) do
-    attrs =
-      attrs
-      |> Map.put_new(:event_id, event_id())
-      |> Map.put_new(:ref, "")
-      |> Map.put_new(:project, "")
-      |> Map.put_new(:session_type, "")
-      |> Map.put_new(:session_kind, "")
-      |> Map.put_new(:control_mode, "")
-      |> Map.put_new(:work_state, "")
-      |> Map.put_new(:action, "")
-      |> Map.update!(:payload, &encode_payload/1)
+  defp prepare_event_attrs(attrs, now) do
+    attrs
+    |> Map.put_new(:event_id, event_id())
+    |> Map.put_new(:ref, "")
+    |> Map.put_new(:project, "")
+    |> Map.put_new(:session_type, "")
+    |> Map.put_new(:session_kind, "")
+    |> Map.put_new(:control_mode, "")
+    |> Map.put_new(:work_state, "")
+    |> Map.put_new(:action, "")
+    |> Map.put_new(:summary, "")
+    |> Map.update!(:payload, &encode_payload/1)
+    |> Map.put(:inserted_at, now)
+    |> trim_string_fields()
+  end
 
-    %Event{}
-    |> Event.changeset(attrs)
-    |> Repo.insert()
-    |> case do
-      {:ok, event} -> event
-      {:error, changeset} -> Repo.rollback(changeset)
-    end
+  @trimmed_fields ~w(event_id kind severity ref project session_type session_kind
+                     control_mode work_state action summary fingerprint)a
+
+  defp trim_string_fields(attrs) do
+    Enum.reduce(@trimmed_fields, attrs, fn key, acc ->
+      case Map.get(acc, key) do
+        nil -> acc
+        value when is_binary(value) -> Map.put(acc, key, String.trim(value))
+        _ -> acc
+      end
+    end)
+  end
+
+  # Single query returning {ref, kind} => latest fingerprint for every
+  # (ref, kind) pair that has any existing row whose ref and kind both
+  # appear in the candidate batch. Uses the (ref, kind, id) composite
+  # index added in migration 20260515000000.
+  #
+  # The WHERE filter is `ref IN refs AND kind IN kinds` rather than a
+  # tuple-IN, so it may over-select pairs that exist in the table but
+  # weren't in this batch. That's correct: the fold only looks up keys
+  # it cares about, and the over-fetch is bounded by U_ref × U_kind
+  # (typically tens).
+  defp fetch_latest_fingerprints_for([]), do: %{}
+
+  defp fetch_latest_fingerprints_for(prepared) do
+    refs = prepared |> Enum.map(&Map.get(&1, :ref, "")) |> Enum.uniq()
+    kinds = prepared |> Enum.map(&Map.fetch!(&1, :kind)) |> Enum.uniq()
+
+    latest_ids =
+      from(e in Event,
+        where: e.ref in ^refs and e.kind in ^kinds,
+        group_by: [e.ref, e.kind],
+        select: %{ref: e.ref, kind: e.kind, max_id: max(e.id)}
+      )
+
+    from(e in Event,
+      join: l in subquery(latest_ids),
+      on: e.id == l.max_id,
+      select: {e.ref, e.kind, e.fingerprint}
+    )
+    |> Repo.all()
+    |> Map.new(fn {ref, kind, fp} -> {{ref, kind}, fp} end)
   end
 
   defp put_default_fingerprint(attrs) do
@@ -335,22 +408,6 @@ defmodule JX.MonitorEvents do
   end
 
   defp decode_payload(_payload), do: %{}
-
-  defp duplicate_latest?(attrs) do
-    ref = Map.get(attrs, :ref, "")
-    kind = Map.fetch!(attrs, :kind)
-    fingerprint = Map.fetch!(attrs, :fingerprint)
-
-    Event
-    |> where([event], event.ref == ^ref and event.kind == ^kind)
-    |> order_by([event], desc: event.id)
-    |> limit(1)
-    |> Repo.one()
-    |> case do
-      %Event{fingerprint: ^fingerprint} -> true
-      _event -> false
-    end
-  end
 
   defp scan_events(scan) do
     profiles = Map.get(scan, :profiles, [])
