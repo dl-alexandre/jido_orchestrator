@@ -28,6 +28,12 @@ defmodule JX.HostCapacity.CapacityPoller do
   @default_interval_ms 5 * 60 * 1_000
   @default_runs_root "~/.jx/runs"
 
+  # Caps on parallel per-host snapshot work. SSH probes are the slow leg —
+  # one bad host must not drag the whole cycle. Per-host timeout kills a
+  # stuck probe so the next cycle can still run cleanly.
+  @poll_max_concurrency 4
+  @poll_per_host_timeout_ms 30_000
+
   # ---------------------------------------------------------------------------
   # Supervision API
   # ---------------------------------------------------------------------------
@@ -98,14 +104,28 @@ defmodule JX.HostCapacity.CapacityPoller do
       end)
       |> Enum.filter(fn {_host, total} -> total > 0 end)
 
-    Enum.each(hosts_with_active_sessions, fn {host, active} ->
-      case Observer.snapshot(host, active) do
-        {:ok, _obs} ->
-          Logger.debug("[CapacityPoller] snapshot recorded for #{host.name} (#{active} active)")
+    # Run snapshots concurrently under the supervised Task supervisor
+    # (added in /phx:perf #5). Replaces the previous serial Enum.each so
+    # one slow / laggy SSH host can't drag the entire poll cycle, and
+    # gives each probe a per-host timeout that kills only that one task.
+    hosts_with_active_sessions
+    |> Task.Supervisor.async_stream(
+      JX.TaskSupervisor,
+      fn {host, active} -> {host, active, Observer.snapshot(host, active)} end,
+      max_concurrency: @poll_max_concurrency,
+      timeout: @poll_per_host_timeout_ms,
+      on_timeout: :kill_task,
+      ordered: false
+    )
+    |> Enum.each(fn
+      {:ok, {host, active, {:ok, _obs}}} ->
+        Logger.debug("[CapacityPoller] snapshot recorded for #{host.name} (#{active} active)")
 
-        {:error, reason} ->
-          Logger.warning("[CapacityPoller] snapshot failed for #{host.name}: #{inspect(reason)}")
-      end
+      {:ok, {host, _active, {:error, reason}}} ->
+        Logger.warning("[CapacityPoller] snapshot failed for #{host.name}: #{inspect(reason)}")
+
+      {:exit, reason} ->
+        Logger.warning("[CapacityPoller] snapshot task exited: #{inspect(reason)}")
     end)
   end
 
