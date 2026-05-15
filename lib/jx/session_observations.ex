@@ -85,23 +85,29 @@ defmodule JX.SessionObservations do
   def list_stale(opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
     stale_after_seconds = Keyword.get(opts, :stale_after_seconds, 300)
-    history_limit = Keyword.get(opts, :history_limit, max(limit * 5, 100))
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
-    SessionObservation
-    |> maybe_filter_ref(Keyword.get(opts, :ref))
-    |> maybe_filter_host(Keyword.get(opts, :host))
-    |> maybe_filter_type(Keyword.get(opts, :type))
-    |> maybe_filter_work_state(Keyword.get(opts, :work_state))
-    |> order_by([observation], desc: observation.id)
-    |> limit(^history_limit)
+    base =
+      SessionObservation
+      |> maybe_filter_ref(Keyword.get(opts, :ref))
+      |> maybe_filter_host(Keyword.get(opts, :host))
+      |> maybe_filter_type(Keyword.get(opts, :type))
+      |> maybe_filter_work_state(Keyword.get(opts, :work_state))
+
+    # SQL returns just the latest observation per ref (within the filtered
+    # set), backed by the (ref, id) composite index added in migration
+    # 20260515010000. Drops the previous over-fetch + Enum.group_by step
+    # which read up to max(limit * 5, 100) rows even when most filtered
+    # refs had no stale candidate.
+    latest_ids =
+      from(o in base,
+        group_by: o.ref,
+        select: max(o.id)
+      )
+
+    from(o in SessionObservation, where: o.id in subquery(latest_ids))
     |> Repo.all()
-    |> Enum.group_by(& &1.ref)
-    |> Enum.map(fn {_ref, observations} ->
-      observations
-      |> Enum.max_by(& &1.id)
-      |> stale_map(now)
-    end)
+    |> Enum.map(&stale_map(&1, now))
     |> Enum.filter(&(&1.stale_seconds >= stale_after_seconds))
     |> Enum.sort_by(& &1.stale_seconds, :desc)
     |> Enum.take(limit)
