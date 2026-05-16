@@ -51,6 +51,15 @@ defmodule JX.HostCapacity.CapacityPoller do
     }
   end
 
+  @doc """
+  Run a single poll synchronously without going through the GenServer.
+
+  Same code path the supervised `:poll` tick uses — exposed for tests and
+  one-off operator invocations so capacity observations can be taken on
+  demand without waiting for the next interval.
+  """
+  def run_once, do: poll_all_active_hosts()
+
   # ---------------------------------------------------------------------------
   # GenServer callbacks
   # ---------------------------------------------------------------------------
@@ -108,9 +117,13 @@ defmodule JX.HostCapacity.CapacityPoller do
     # (added in /phx:perf #5). Replaces the previous serial Enum.each so
     # one slow / laggy SSH host can't drag the entire poll cycle, and
     # gives each probe a per-host timeout that kills only that one task.
-    hosts_with_active_sessions
-    |> Task.Supervisor.async_stream(
+    # Note: pass supervisor as the first positional arg — piping the
+    # hosts list into &Task.Supervisor.async_stream/4 misorders args and
+    # the supervisor atom gets interpreted as the enumerable. Caught by
+    # capacity_poller_test.exs after this was already shipped.
+    Task.Supervisor.async_stream(
       JX.TaskSupervisor,
+      hosts_with_active_sessions,
       fn {host, active} -> {host, active, Observer.snapshot(host, active)} end,
       max_concurrency: @poll_max_concurrency,
       timeout: @poll_per_host_timeout_ms,
